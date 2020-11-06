@@ -9,8 +9,9 @@ def create_file(handler, filename, data):
     handler.create(filename, data)
 
 
-def delete_file(handler, filename):
-    handler.delete(filename)
+def read_file(handler, filename):
+    data = handler.read(filename)
+    print(data)
 
 
 def main(args):
@@ -27,9 +28,9 @@ def main(args):
 
     # Handle Client operation
     if args[0] == "create":
-        create_file(handler, filename = args[1], data = args[2])
-    elif args[0] == "delete":
-        delete_file(handler, filename=args[1])
+        create_file(handler, filename=args[1], data=args[2])
+    elif args[0] == "read":
+        read_file(handler, filename=args[1])
     else:
         print("Error reading client request")
         exit()

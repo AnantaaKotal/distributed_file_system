@@ -37,6 +37,14 @@ class DirectoryService(rpyc.Service):
             self.file_table.add((filename, (handler_host, handler_port)))
             print(self.file_table)
 
+        def exposed_get_primary_for_file(self, filename):
+            file_table_list = list(self.file_table)
+            for file in file_table_list:
+                if file[0] == filename:
+                    return file[1]
+
+            print("FILE NOT FOUND")
+
 
 if __name__ == "__main__":
     server = ThreadedServer(DirectoryService, port=12345)
