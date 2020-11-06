@@ -11,15 +11,21 @@ import os
 
 from rpyc.utils.server import ThreadedServer
 
-def set_conf():
+"""def set_conf():
   conf=configparser.ConfigParser()
   conf.read('dfs.conf')
-  PrimaryService.exposed_Primary.block_size = int(conf.get('master','block_size'))
+  PrimaryService.exposed_Primary.block_size = int(conf.get('master','block_size'))"""
 
 
 class PrimaryService(rpyc.Service):
-    class exposed_Primary():
-        file_table = {}
+    class exposed_Primary(object):
+        def __init__(self, a, b):
+            self.a = a
+            self.b = b
+
+        def exposed_foo(self):
+            return self.a + self.b
+        """file_table = {}
         block_mapping = {}
         handlers = {}
 
@@ -55,5 +61,11 @@ class PrimaryService(rpyc.Service):
                 blocks.append((block_uuid, nodes_ids))
 
                 self.__class__.file_table[dest].append((block_uuid, nodes_ids))
-            return blocks
+            return blocks"""
+
+
+
+if __name__ == "__main__":
+    server = ThreadedServer(PrimaryService, port=12345)
+    server.start()
 
