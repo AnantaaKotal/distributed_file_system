@@ -13,6 +13,9 @@ def read_file(handler, filename):
     data = handler.read(filename)
     print(data)
 
+def write(handler,filename, data):
+    handler.write(filename, data)
+
 
 def main(args):
     # Request Connection to Directory
@@ -31,6 +34,8 @@ def main(args):
         create_file(handler, filename=args[1], data=args[2])
     elif args[0] == "read":
         read_file(handler, filename=args[1])
+    elif args[0] == "write":
+        write(handler, filename=args[1], data=args[2])
     else:
         print("Error reading client request")
         exit()
