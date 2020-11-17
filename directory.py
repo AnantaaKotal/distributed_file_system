@@ -49,21 +49,6 @@ class DirectoryService(rpyc.Service):
         s_ClientAdress, s_ClientPort=self._conn._config['endpoints'][1]
         '''
 
-        def exposed_write(self,filename,ipaddressofclient):
-            if filename in leased_files:
-                timer = leased_files[filename][1]
-                #adding client to the  client queue
-                if filename in servers_in_queue:
-                    servers_in_queue[filename].append(ipaddressofclient)
-                else:
-                    directory.servers_in_queue[filename] = clientip
-                print(filename+'is being used currently. Please wait for'+timer)
-                timer
-            else:
-                return True
-
-
-
 if __name__ == "__main__":
     server = ThreadedServer(DirectoryService, port=12345)
     server.start()
