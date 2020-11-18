@@ -70,10 +70,16 @@ class HandlerService(rpyc.Service):
             directory.add_file(filename, self.ip_address, PORT)
 
         def exposed_create(self, filename, data):
+            global files_owned
+            files_owned_new = files_owned
+            print(files_owned_new)
             with open(DATA_DIR + str(filename), 'w') as f:
                 f.write(data)
             self.add_to_directory_file_table(filename)
-            self.files_owned.append(filename)
+            files_owned_new.append(filename)
+            files_owned = files_owned_new
+            print("ding")
+            print(files_owned)
 
         def exposed_Delete(self, filename):
             if filename in files_owned:
@@ -85,9 +91,11 @@ class HandlerService(rpyc.Service):
                 primary_handler.Delete(filename)
 
         def exposed_replicated_read(self, filename):
+            global files_owned
+
             try:
-                idx = self.files_owned.index(filename)
-                file = self.files_owned[idx]
+                idx = files_owned.index(filename)
+                file = files_owned[idx]
                 with open(DATA_DIR + str(filename), 'r') as f:
                     file_obj = f.read()
                     return file_obj
@@ -96,18 +104,28 @@ class HandlerService(rpyc.Service):
                 print("FILE NOT FOUND")
                 exit()
 
-        def exposed_read(self, filename, data):
+        def exposed_read(self, filename):
+            global files_owned
+            global files_replicated
+            print(files_owned)
+            print(files_replicated)
+
+            files_owned_local = files_owned
+            files_replicated_local = files_replicated
+
             try:
-                idx = self.files_owned.index(filename)
-                file = self.files_owned[idx]
+                idx = files_owned_local.index(filename)
+                ##ANANTAA: What is this doing?
+                file = files_owned_local[idx]
                 with open(DATA_DIR + str(filename), 'r') as f:
                     data = f.read()
                 return data
 
             except ValueError:
                 try:
-                    idx = self.files_replicated.index(filename)
-                    file = self.files_replicated[idx]
+                    idx = files_replicated_local.index(filename)
+                    ##ANANTAA: What is this doing?
+                    file = files_replicated_local[idx]
                     with open(REPLICA_DIR + "replicated_" + str(filename), 'r') as f:
                         data = f.read()
                     return data
@@ -123,7 +141,7 @@ class HandlerService(rpyc.Service):
                     with open(REPLICA_DIR + "replicated_" + str(filename), 'w') as f:
                         f.write(file_obj)
 
-                    self.files_replicated.append(filename)
+                    files_replicated_local.append(filename)
 
                     with open(REPLICA_DIR + "replicated_" + str(filename), 'r') as f:
                         data = f.read()
@@ -138,6 +156,7 @@ class HandlerService(rpyc.Service):
             primary_handler = con.root.Handler()
             file_obj = primary_handler.replicated_read(filename)
             # adding reference in primary owner about replicas
+            #ANANTAA: what is the conn attribute?
             primary_handler.files_owned[filename] =[self._conn._config['endpoints'][1]]
             #Here replica is getting updated if it exists locally on handler
             if filename in files_replicated:
@@ -183,8 +202,9 @@ class HandlerService(rpyc.Service):
 
 # **********************Initiate the write based on whether the file is present on current handler***************************
         def Initiate_Write_RequestOnTop(self,filename,data):
+            global files_owned
             # case1 : Current handler is primary owner
-            if filename in self.files_owned:
+            if filename in files_owned:
                 # checking if file is already leased:
                 if leased_files[filename] is False:
                     self.writefile(filename, data)
@@ -205,6 +225,7 @@ class HandlerService(rpyc.Service):
                     self.writefile(filename, data)
 
         def exposed_write(self, filename, data, clientip=None, clientsocket=None):
+            #ANANTAA: what is the conn attribute?
             s_ClientAdress, s_ClientPort = self._conn._config['endpoints'][1]
             index = clients_in_queue[filename].index(clients_in_queue[filename].append([s_ClientAdress, s_ClientPort,data]))
             # we are using lamport's clock logic, checking if the just now appended request is at index 0
