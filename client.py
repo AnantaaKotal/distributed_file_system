@@ -13,8 +13,13 @@ def read_file(handler, filename):
     data = handler.read(filename)
     print(data)
 
+
 def write(handler,filename, data):
     handler.write(filename, data)
+
+
+def Delete(handler,filename):
+    handler.Delete(filename)
 
 
 def main(args):
@@ -36,6 +41,8 @@ def main(args):
         read_file(handler, filename=args[1])
     elif args[0] == "write":
         write(handler, filename=args[1], data=args[2])
+    elif args[0] == "Delete":
+        delete(handler, filename=args[0])
     else:
         print("Error reading client request")
         exit()

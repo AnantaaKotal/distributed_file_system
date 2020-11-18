@@ -20,7 +20,7 @@ leased_files = {}
 clients_in_queue = {}
 # this should be global because otherwise every new thread of slave server will have empty structure for files_owned
 files_owned = []
-files_replicated = []
+files_replicated = {}
 
 
 # Report to Directory upon start
@@ -75,6 +75,15 @@ class HandlerService(rpyc.Service):
             self.add_to_directory_file_table(filename)
             self.files_owned.append(filename)
 
+        def exposed_Delete(self, filename):
+            if filename in files_owned:
+                os.remove(DATA_DIR + str(filename))
+            elif filename in files_replicated:
+                primary_handler_addr = files_replicated[filename]
+                con = rpyc.connect(host=primary_handler_addr[0], port=primary_handler_addr[1])
+                primary_handler = con.root.Handler()
+                primary_handler.Delete(filename)
+
         def exposed_replicated_read(self, filename):
             try:
                 idx = self.files_owned.index(filename)
@@ -119,7 +128,7 @@ class HandlerService(rpyc.Service):
                     with open(REPLICA_DIR + "replicated_" + str(filename), 'r') as f:
                         data = f.read()
                     return data
-
+# Replicating the file locally, it updates the existing replica as
         def exposed_get_primary_and_replicate(self,filename):
             con1 = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
             directory = con1.root.Directory()
@@ -128,6 +137,8 @@ class HandlerService(rpyc.Service):
             con = rpyc.connect(host=primary_handler_addr[0], port=primary_handler_addr[1])
             primary_handler = con.root.Handler()
             file_obj = primary_handler.replicated_read(filename)
+            # adding reference in primary owner about replicas
+            primary_handler.files_owned[filename] =[self._conn._config['endpoints'][1]]
             #Here replica is getting updated if it exists locally on handler
             if filename in files_replicated:
                 with open(DATA_DIR + str(filename), 'w') as file:
@@ -136,13 +147,20 @@ class HandlerService(rpyc.Service):
             else:
                 with open(DATA_DIR + str(filename), 'w') as file:
                     file.write(file_obj)
-                files_replicated.append(filename)
+                files_replicated[filename] = primary_handler
 
 
 # *****************************************************Timer******************************
         # Timer to track leasing period
         @timeout_decorator.timeout(30, timeout_exception="time ended for the lease")
         def open_file(self, filename, data):
+            with open(DATA_DIR + str(filename), 'a+') as file:
+                file.write(data)
+            popped = leased_files.pop(0)
+            print("Write complete for client: ", popped)
+
+        @timeout_decorator.timeout(60, timeout_exception="time ended for the lease")
+        def open_file1(self, filename, data):
             with open(DATA_DIR + str(filename), 'a+') as file:
                 file.write(data)
             popped = leased_files.pop(0)
@@ -155,7 +173,10 @@ class HandlerService(rpyc.Service):
             except timeout_decorator.timeout as timeout_exception:
                 answer = input("Need to extend the lease?")
                 if answer == 'YES' or answer == 'Yes' or answer == 'yes':
-                    pass #we'll increase timeout period here
+                    try:
+                        self.open_file1(filename,data)
+                    except timeout_decorator.timeout as timeout_exception:
+                        print("write not finished in given time, no changes committed to the file.")
                 else:
                     leased_files[filename] = False
                     clients_in_queue[filename].pop(0)
@@ -195,6 +216,7 @@ class HandlerService(rpyc.Service):
                 # we check if request is on top after 10secs sleep
                 if clients_in_queue[filename].index([s_ClientAdress, s_ClientPort,data]) == 0:
                     self.Initiate_Write_RequestOnTop(self, filename, data)
+
 
 
 if __name__ == "__main__":
