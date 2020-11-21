@@ -5,33 +5,73 @@ import pathlib
 import time
 import timeout_decorator
 from collections import deque
+from configparser import ConfigParser
+from datetime import datetime
+import math
 
 from rpyc.utils.server import ThreadedServer
+import socket
 
-DATA_DIR = str(pathlib.Path().absolute()) + "/tmp/"
-REPLICA_DIR = str(pathlib.Path().absolute()) + "/rep/"
+
+#Directory Address
 DIRECTORY_ADDR = 'localhost'
 DIRECTORY_PORT = 12345
 PORT = 8888
-# Directory to keep track of leased files with structure as {filename : file status} Holds the islocked flag
-leased_files = {}
+
+
 # a list of lists to keep track of servers requesting a particular file,
 # data structure will hold another list consisting of [clientip not necessarily socket, timestamp, data to be written] and so on..
 clients_in_queue = {}
-# this should be global because otherwise every new thread of slave server will have empty structure for files_owned
-files_owned = []
-files_replicated = {}
 
+
+# this should be global because otherwise every new thread of slave server will have empty structure for files_owned
+files_owned = "FILES_OWNED"
+files_replicated = "FILES_REPLICATED"
+on_lease = "ON_LEASE"
+
+UUID = ""
+
+# main directory for files
+METADATA_DIR = str(pathlib.Path().absolute()) + "/config/metadata/"
+FILES_DIR = str(pathlib.Path().absolute()) + "/files/"
+OWNED = "/owned/"
+REPLICATED = "/replicated/"
+
+
+def get_ip_address():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(("8.8.8.8", 80))
+    return s.getsockname()[0]
 
 # Report to Directory upon start
-def report_self_to_directory(host, port):
-    con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
-    directory = con.root.Directory()
-    directory.add_handler_address(socket.gethostbyname('localhost'), port)
-
-    # change global PORT
+def report_self_to_directory(port):
     global PORT
     PORT = port
+
+    con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+    directory = con.root.Directory()
+    isRegistered, fname = directory.add_handler_address(get_ip_address(), port)
+
+    global UUID
+    UUID = fname
+    print("Identifier: " + UUID)
+
+    if isRegistered:
+        f = open(METADATA_DIR + fname + ".conf", "r")
+        print(f.read())
+    else:
+        config_object = ConfigParser()
+        config_object[files_owned] = {}
+        config_object[files_replicated] = {}
+        config_object[on_lease] = {}
+        with open(METADATA_DIR + fname + ".conf", 'w') as conf:
+            config_object.write(conf)
+
+        os.mkdir(FILES_DIR + UUID)
+        os.mkdir(FILES_DIR + UUID + OWNED)
+        os.mkdir(FILES_DIR + UUID + REPLICATED)
+
+    print("Reported to Directory")
 
 
 # Handler Start up
@@ -55,98 +95,236 @@ def startup():
                 print("Try another localhost")
                 exit()
 
-    report_self_to_directory(t.host, t.port)
-    print("Reported to Directory")
+    report_self_to_directory(port)
     t.start()
 
 
 class HandlerService(rpyc.Service):
     class exposed_Handler():
-        ip_address = socket.gethostbyname('localhost')
-
-        def add_to_directory_file_table(self, filename):
-            con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
-            directory = con.root.Directory()
-            directory.add_file(filename, self.ip_address, PORT)
+        def exposed_temp(self):
+            time.sleep(10)
+            raise TimeoutError
 
         def exposed_create(self, filename, data):
-            global files_owned
-            files_owned_new = files_owned
-            print(files_owned_new)
-            with open(DATA_DIR + str(filename), 'w') as f:
-                f.write(data)
-            self.add_to_directory_file_table(filename)
-            files_owned_new.append(filename)
-            files_owned = files_owned_new
-            print("ding")
-            print(files_owned)
+            con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+            directory = con.root.Directory()
 
-        def exposed_Delete(self, filename):
-            if filename in files_owned:
-                os.remove(DATA_DIR + str(filename))
-            elif filename in files_replicated:
-                primary_handler_addr = files_replicated[filename]
-                con = rpyc.connect(host=primary_handler_addr[0], port=primary_handler_addr[1])
-                primary_handler = con.root.Handler()
-                primary_handler.Delete(filename)
+            fileNameExists = directory.add_file(filename, get_ip_address(), PORT)
+
+            global UUID
+
+            if fileNameExists:
+                raise ValueError("File Name Exists; Try another File Name")
+            else:
+                self.local_file_create(filename, data)
 
         def exposed_replicated_read(self, filename):
-            global files_owned
-
-            try:
-                idx = files_owned.index(filename)
-                file = files_owned[idx]
-                with open(DATA_DIR + str(filename), 'r') as f:
-                    file_obj = f.read()
-                    return file_obj
-
-            except ValueError:
-                print("FILE NOT FOUND")
-                exit()
-
-        def exposed_read(self, filename):
-            global files_owned
-            global files_replicated
-            print(files_owned)
-            print(files_replicated)
-
-            files_owned_local = files_owned
-            files_replicated_local = files_replicated
-
-            try:
-                idx = files_owned_local.index(filename)
-                ##ANANTAA: What is this doing?
-                file = files_owned_local[idx]
-                with open(DATA_DIR + str(filename), 'r') as f:
+            files_owned_dir = FILES_DIR + UUID + OWNED
+            if os.path.exists(files_owned_dir + str(filename)):
+                with open(files_owned_dir + str(filename), 'r') as f:
                     data = f.read()
                 return data
+            else:
+                raise ValueError("FILE NOT FOUND")
 
-            except ValueError:
+        def exposed_read(self, filename):
+            if self.local_is_file_owned(filename):
+                files_owned_dir = FILES_DIR + UUID + OWNED
+
+                with open(files_owned_dir + str(filename), 'r') as f:
+                    data = f.read()
+                return data
+            elif self.local_is_file_replicated(filename):
+                config_object = ConfigParser()
+                config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
+
+                files_replicated_dir = FILES_DIR + UUID + REPLICATED
+
+                with open(files_replicated_dir + str(filename), 'r') as f:
+                    data = f.read()
+                return data
+            else:
                 try:
-                    idx = files_replicated_local.index(filename)
-                    ##ANANTAA: What is this doing?
-                    file = files_replicated_local[idx]
-                    with open(REPLICA_DIR + "replicated_" + str(filename), 'r') as f:
-                        data = f.read()
+                    data = self.replicate_file_for_read(filename)
                     return data
-
                 except ValueError:
-                    con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
-                    directory = con.root.Directory()
+                    raise ValueError("FILE NOT FOUND")
 
-                    primary_handler_addr = directory.get_primary_for_file(filename)
+        def exposed_delete(self, filename):
+            if self.local_is_file_owned(filename):
+                # delete file
+                files_owned_dir = FILES_DIR + UUID + OWNED
+                os.remove(files_owned_dir + str(filename))
+
+                # update metadata config for handler
+                config_object = ConfigParser()
+                config_object.read(METADATA_DIR + UUID + '.conf')
+
+                config_object.remove_option('FILES_OWNED', filename)
+                with open(METADATA_DIR + UUID + '.conf', 'w') as conf:
+                    config_object.write(conf)
+
+                self.print_on_update("Deleted")
+
+                # Tell Directory to delete file from list
+                con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+                directory = con.root.Directory()
+                directory.delete_file_from_record(filename)
+            else:
+                # Find the Primary Handler for file
+                con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+                directory = con.root.Directory()
+
+                primary_handler_addr = directory.get_primary_for_file(filename)
+
+                if primary_handler_addr != "None":
                     con = rpyc.connect(host=primary_handler_addr[0], port=primary_handler_addr[1])
                     primary_handler = con.root.Handler()
-                    file_obj = primary_handler.replicated_read(filename)
-                    with open(REPLICA_DIR + "replicated_" + str(filename), 'w') as f:
-                        f.write(file_obj)
 
-                    files_replicated_local.append(filename)
+                    primary_handler.delete(filename)
 
-                    with open(REPLICA_DIR + "replicated_" + str(filename), 'r') as f:
-                        data = f.read()
-                    return data
-# Replicating the file locally, it updates the existing replica as
+                files_replicated_dir = FILES_DIR + UUID + REPLICATED
+                if os.path.exists(files_replicated_dir + filename):
+                    os.remove(files_replicated_dir + filename)
+
+                config_object = ConfigParser()
+                config_object.read(METADATA_DIR + UUID + '.conf')
+                config_object.remove_option('FILES_REPLICATED', filename)
+
+                with open(METADATA_DIR + UUID + '.conf', 'w') as conf:
+                    config_object.write(conf)
+
+                self.print_on_update("Deleted")
+
+
+        # Exposed Function, for Directory Service to check if file has been replicated locally
+        def exposed_is_file_replicated(self, filename):
+            return self.local_is_file_replicated(filename)
+
+        # Called by Directory Service to Reassign Primary for Node Resilience
+        def exposed_make_primary(self, filename):
+            files_replicated_dir = FILES_DIR + UUID + REPLICATED
+
+            with open(files_replicated_dir + str(filename), 'r') as f:
+                data = f.read()
+
+            # Add to files owned
+            self.local_file_create(filename, data)
+
+            # Remove from replicated
+            os.remove(files_replicated_dir + filename)
+
+            config_object = ConfigParser()
+            config_object.read(METADATA_DIR + UUID + '.conf')
+
+            config_object.remove_option('FILES_REPLICATED', filename)
+
+            with open(METADATA_DIR + UUID + '.conf', 'w') as conf:
+                config_object.write(conf)
+
+            self.print_on_update("Added")
+
+        # Checks if owner of file
+        def local_is_file_owned(self, filename):
+            config_object = ConfigParser()
+            config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
+
+            files_owned_list = list(config_object.items('FILES_OWNED'))
+
+            for key, value in files_owned_list:
+                if key == filename:
+                    return True
+            return False
+
+        # Checks if file has been replicated locally
+        def local_is_file_replicated(self, filename):
+            config_object = ConfigParser()
+            config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
+
+            files_replicated_list = list(config_object.items('FILES_REPLICATED'))
+
+            for key, value in files_replicated_list:
+                if key == filename:
+                    replicated_time = datetime.strptime(value, '%Y-%m-%d %H:%M:%S.%f')
+                    current_time = datetime.now()
+                    diff = math.floor((current_time - replicated_time).total_seconds())
+
+                    if diff <= 30:
+                        return True
+            return False
+
+        def local_file_create(self, filename, data):
+            config_object = ConfigParser()
+            config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
+
+
+            # Update Metadata Config
+            files = config_object["FILES_OWNED"]
+            files[filename] = "NO"
+
+            with open(METADATA_DIR + UUID + '.conf', 'w') as conf:
+                config_object.write(conf)
+
+            # Create file locally
+            files_owned_dir = FILES_DIR + UUID + OWNED
+            with open(files_owned_dir + str(filename), 'w') as f:
+                f.write(data)
+
+            self.print_on_update("Created")
+
+        def replicate_file_for_read(self, filename):
+            files_replicated_dir = FILES_DIR + UUID + REPLICATED
+
+            con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+            directory = con.root.Directory()
+
+            primary_handler_addr = directory.get_primary_for_file(filename)
+
+            if primary_handler_addr == "None":
+                # file has been removed or does not exist
+                if os.path.exists(files_replicated_dir + str(filename)):
+                    os.remove(files_replicated_dir + str(filename))
+
+                raise ValueError("FILE NOT FOUND")
+            else:
+                con = rpyc.connect(host=primary_handler_addr[0], port=primary_handler_addr[1])
+                primary_handler = con.root.Handler()
+
+                file_obj = primary_handler.replicated_read(filename)
+
+                with open(files_replicated_dir + str(filename), 'w') as f:
+                    f.write(file_obj)
+
+                # Add timestamp for replication
+                current_time = datetime.now()
+                current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+                config_object = ConfigParser()
+                config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
+
+                files_replicated_info = config_object["FILES_REPLICATED"]
+                files_replicated_info[filename] = current_time_str
+
+                with open(METADATA_DIR + UUID + '.conf', 'w') as conf:
+                    config_object.write(conf)
+
+                self.print_on_update("Replicated")
+
+                with open(files_replicated_dir + str(filename), 'r') as f:
+                    data = f.read()
+
+                return data
+
+        def print_on_update(self, func):
+            print("=====================================================")
+            print("A file has been %s" % (func))
+            print("Updated File List for this Server")
+            f = open(METADATA_DIR + UUID + ".conf", "r")
+            print(f.read())
+
+        # *****************************************************Timer******************************
+
+        # Replicating the file locally, it updates the existing replica as
         def exposed_get_primary_and_replicate(self,filename):
             con1 = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
             directory = con1.root.Directory()
@@ -157,7 +335,10 @@ class HandlerService(rpyc.Service):
             file_obj = primary_handler.replicated_read(filename)
             # adding reference in primary owner about replicas
             #ANANTAA: what is the conn attribute?
-            primary_handler.files_owned[filename] =[self._conn._config['endpoints'][1]]
+
+            #list of handlers that have replica and need to be updated
+            primary_handler.files_owned[filename] = (socket.gethostbyname('localhost'), PORT)
+
             #Here replica is getting updated if it exists locally on handler
             if filename in files_replicated:
                 with open(DATA_DIR + str(filename), 'w') as file:
@@ -168,8 +349,9 @@ class HandlerService(rpyc.Service):
                     file.write(file_obj)
                 files_replicated[filename] = primary_handler
 
+# broadcast from primary
 
-# *****************************************************Timer******************************
+
         # Timer to track leasing period
         @timeout_decorator.timeout(30, timeout_exception="time ended for the lease")
         def open_file(self, filename, data):
@@ -200,7 +382,10 @@ class HandlerService(rpyc.Service):
                     leased_files[filename] = False
                     clients_in_queue[filename].pop(0)
 
+
 # **********************Initiate the write based on whether the file is present on current handler***************************
+
+        #make leased file a config
         def Initiate_Write_RequestOnTop(self,filename,data):
             global files_owned
             # case1 : Current handler is primary owner
@@ -213,6 +398,7 @@ class HandlerService(rpyc.Service):
                     while leased_files[filename] is True:
                         time.sleep(10)
                     self.writefile(filename, data)
+
             # case2 : Current handler is not the primary owner
             elif filename not in files_owned:
                 # replicating file in below code along with status
@@ -224,24 +410,26 @@ class HandlerService(rpyc.Service):
                         time.sleep(10)
                     self.writefile(filename, data)
 
+                    # push to primary
+
         def exposed_write(self, filename, data, clientip=None, clientsocket=None):
             #ANANTAA: what is the conn attribute?
-            s_ClientAdress, s_ClientPort = self._conn._config['endpoints'][1]
+            s_ClientAdress, s_ClientPort = HandlerService.stuff()
+
             index = clients_in_queue[filename].index(clients_in_queue[filename].append([s_ClientAdress, s_ClientPort,data]))
             # we are using lamport's clock logic, checking if the just now appended request is at index 0
             if index == 0:
                 #we call Initiate_Write_RequestOnTop function
                 self.Initiate_Write_RequestOnTop(self,filename,data)
             else:
-                time.sleep(10)
                 # we check if request is on top after 10secs sleep
-                if clients_in_queue[filename].index([s_ClientAdress, s_ClientPort,data]) == 0:
-                    self.Initiate_Write_RequestOnTop(self, filename, data)
+                while(clients_in_queue[filename].index([s_ClientAdress, s_ClientPort,data]) != 0):
+                    time.sleep(10)
 
+                self.Initiate_Write_RequestOnTop(self, filename, data)
+
+# *****************************************************Timer******************************
 
 
 if __name__ == "__main__":
-    if not os.path.isdir(DATA_DIR):
-        os.mkdir(DATA_DIR)
-
     startup()
