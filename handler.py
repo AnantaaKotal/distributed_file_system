@@ -16,6 +16,8 @@ import socket
 #Directory Address
 DIRECTORY_ADDR = 'localhost'
 DIRECTORY_PORT = 12345
+
+#DEFAULT PORT
 PORT = 8888
 
 
@@ -24,7 +26,7 @@ PORT = 8888
 clients_in_queue = {}
 
 
-# this should be global because otherwise every new thread of slave server will have empty structure for files_owned
+# global variables
 files_owned = "FILES_OWNED"
 files_replicated = "FILES_REPLICATED"
 on_lease = "ON_LEASE"

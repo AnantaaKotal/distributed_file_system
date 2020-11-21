@@ -2,6 +2,9 @@ from datetime import datetime
 import time
 import math
 from configparser import ConfigParser
+import webbrowser
+import os
+import subprocess
 
 path = '/Users/anantaa/Desktop/python/dist_sys/config/metadata/iyyjzmzz.conf'
 file_section = 'FILES_REPLICATED'
@@ -28,4 +31,9 @@ def config_delete():
     with open(path, 'w') as conf:
         config_object.write(conf)
 
-config_delete()
+def file_open():
+    p = subprocess.call(['open', '-a', 'TextEdit', "/Users/anantaa/Desktop/python/dist_sys/config/handlr_addr.conf"])
+    print("You done?")
+
+
+file_open()
