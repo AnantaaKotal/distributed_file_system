@@ -1,10 +1,7 @@
 import rpyc
 import os
-import socket
 import pathlib
 import time
-import timeout_decorator
-from collections import deque
 from configparser import ConfigParser
 from datetime import datetime
 import math
@@ -20,12 +17,6 @@ DIRECTORY_PORT = 12345
 #DEFAULT PORT
 PORT = 8888
 
-
-# a list of lists to keep track of servers requesting a particular file,
-# data structure will hold another list consisting of [clientip not necessarily socket, timestamp, data to be written] and so on..
-clients_in_queue = {}
-
-
 # global variables
 files_owned = "FILES_OWNED"
 files_replicated = "FILES_REPLICATED"
@@ -38,6 +29,9 @@ METADATA_DIR = str(pathlib.Path().absolute()) + "/config/metadata/"
 FILES_DIR = str(pathlib.Path().absolute()) + "/files/"
 OWNED = "/owned/"
 REPLICATED = "/replicated/"
+
+LEASE_TIME = 60
+ALLOWED_EXTENSION_TIME = 2 * LEASE_TIME
 
 
 def get_ip_address():
@@ -153,6 +147,7 @@ class HandlerService(rpyc.Service):
                     raise ValueError("FILE NOT FOUND")
 
         def exposed_delete(self, filename):
+            # !!!! Add queueing logic
             if self.local_is_file_owned(filename):
                 # delete file
                 files_owned_dir = FILES_DIR + UUID + OWNED
@@ -198,6 +193,293 @@ class HandlerService(rpyc.Service):
 
                 self.print_on_update("Deleted")
 
+        # ***********************************************************************************
+
+        # Pessimistic write protocol including leasing logic
+        def exposed_write_request(self, filename, commit_id):
+            timestamp = datetime.now()
+            timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+            if self.local_is_file_owned(filename):
+                self.local_primary_write_queue(filename, commit_id, timestamp_str)
+            else:
+                con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+                directory = con.root.Directory()
+
+                primary_handler_addr = directory.get_primary_for_file(filename)
+
+                if primary_handler_addr != "None":
+                    con = rpyc.connect(host=primary_handler_addr[0], port=primary_handler_addr[1])
+                    primary_handler = con.root.Handler()
+
+                    write_info = primary_handler.primary_write_queue(filename, commit_id, timestamp_str)
+
+                    if write_info is None:
+                        return None
+                    ready_to_write = write_info[0]
+
+                    while not ready_to_write:
+                        queue_number = write_info[1]
+                        sleep_time = (30 * int(queue_number))
+                        time.sleep(sleep_time)
+                        write_info = primary_handler.primary_write_queue(filename, commit_id, timestamp_str)
+
+                        # In case file is deleted by previous action on queue
+                        if write_info is None:
+                            return None
+                        ready_to_write = write_info[0]
+
+                    lease_time = write_info[1]
+                    file_data = write_info[2]
+
+                    return lease_time, file_data
+                else:
+                    return None
+
+
+        def exposed_extend_lease(self, filename, commit_id):
+            if self.local_is_file_owned(filename):
+                return self.local_extend_lease(filename, commit_id)
+            else:
+                con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+                directory = con.root.Directory()
+
+                primary_handler_addr = directory.get_primary_for_file(filename)
+
+                if primary_handler_addr != "None":
+                    con = rpyc.connect(host=primary_handler_addr[0], port=primary_handler_addr[1])
+                    primary_handler = con.root.Handler()
+
+                    return primary_handler.primary_extend_lease(filename, commit_id)
+
+
+        def exposed_write(self, filename, commit_id, data):
+            if self.local_is_file_owned(filename):
+                try:
+                    return self.local_primary_write_commit(filename, commit_id, data)
+                except ValueError as e:
+                    raise e
+
+            else:
+                con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+                directory = con.root.Directory()
+
+                primary_handler_addr = directory.get_primary_for_file(filename)
+
+                if primary_handler_addr != "None":
+                    con = rpyc.connect(host=primary_handler_addr[0], port=primary_handler_addr[1])
+                    primary_handler = con.root.Handler()
+
+                    try:
+                        primary_handler.primary_write_commit(filename, commit_id, data)
+                    except ValueError as e:
+                        raise e
+
+                # update local replica
+                files_replicated_dir = FILES_DIR + UUID + REPLICATED
+                with open(files_replicated_dir + str(filename), 'w') as f:
+                    f.write(data)
+
+        def exposed_primary_write_queue(self, filename, commit_id, timestamp):
+            return self.local_primary_write_queue(filename, commit_id, timestamp)
+
+        def exposed_primary_extend_lease(self, filename, commit_id):
+            return self.local_extend_lease(filename, commit_id)
+
+        def exposed_primary_write_commit(self, filename, commit_id, data):
+            try:
+                return self.local_primary_write_commit(filename, commit_id, data)
+            except ValueError as e:
+                raise e
+
+        def local_primary_write_queue(self, filename, commit_id, timestamp):
+            global LEASE_TIME
+
+            config_object = ConfigParser()
+            config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
+            on_lease_info = config_object["ON_LEASE"]
+
+            file_exits = False
+            for key, value in config_object.items('FILES_OWNED'):
+                if key == filename:
+                    file_exits = True
+
+            lease_queue_entry = commit_id + "," + timestamp
+
+            # If File not found; might have been deleted
+            if not file_exits:
+                return None
+            else:
+                # check if there is existing queue for file
+                for key, value in config_object.items('ON_LEASE'):
+                    if key == filename:
+                        request_queue = list(value.split(';'))
+
+                        # check if top can be removed?
+                        top_request = request_queue[0]
+                        request_info = top_request.split(',')
+                        timestamp_str = request_info[1]
+                        timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S.%f')
+
+                        current_time = datetime.now()
+                        diff = math.floor((current_time - timestamp).total_seconds())
+
+                        # Max Time that a request can be on top of queue
+                        if diff >= 3000:
+                            request_queue.remove(top_request)
+
+                        new_value = ';'.join(map(str, request_queue))
+                        on_lease_info[key] = new_value
+
+                        with open(METADATA_DIR + UUID + '.conf', 'w') as conf:
+                            config_object.write(conf)
+
+                        # If commitId is on top
+                        if request_queue[0] == lease_queue_entry:
+                            request_info = request_queue[0].split(',')
+
+                            self.insert_new_time(filename, commit_id)
+                            files_owned_dir = FILES_DIR + UUID + OWNED
+                            with open(files_owned_dir + str(filename), 'r') as f:
+                                data = f.read()
+
+                            return True, LEASE_TIME, data
+
+                        # if commitId in on queue
+                        elif lease_queue_entry in request_queue:
+                            queue_position = request_queue.index(lease_queue_entry) + 1
+
+                            return False, queue_position
+
+                        # add commitId to queue
+                        else:
+                            request_queue.append(lease_queue_entry)
+                            queue_position = request_queue.index(lease_queue_entry) + 1
+
+                            new_value = ';'.join(map(str, request_queue))
+                            on_lease_info[key] = new_value
+
+                            with open(METADATA_DIR + UUID + '.conf', 'w') as conf:
+                                config_object.write(conf)
+
+                            return False, queue_position
+
+
+                # No Lease Queue for fileName; create new; return true
+                request_queue = list()
+                request_queue.append(lease_queue_entry)
+
+                new_value = ';'.join(map(str, request_queue))
+                on_lease_info[filename] = new_value
+
+                with open(METADATA_DIR + UUID + '.conf', 'w') as conf:
+                    config_object.write(conf)
+
+                files_owned_dir = FILES_DIR + UUID + OWNED
+                with open(files_owned_dir + str(filename), 'r') as f:
+                    data = f.read()
+
+                return True, LEASE_TIME, data
+
+        def local_extend_lease(self, filename, commit_id):
+            global ALLOWED_EXTENSION_TIME
+
+            config_object = ConfigParser()
+            config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
+            on_lease_info = config_object["ON_LEASE"]
+
+            for key, value in config_object.items('ON_LEASE'):
+                if key == filename:
+                    request_queue = list(value.split(';'))
+
+                    top_request = request_queue[0]
+                    request_info = top_request.split(',')
+
+                    if commit_id != request_info[0]:
+                        return False
+
+                    # Only request on queue
+                    if len(request_queue) == 1:
+                        new_timestamp = datetime.now()
+                        new_timestamp_str = new_timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+                        new_top_request = commit_id + "," + new_timestamp_str
+
+                        request_queue.remove(top_request)
+                        request_queue.append(new_top_request)
+
+                        new_value = ';'.join(map(str, request_queue))
+                        on_lease_info[key] = new_value
+                        with open(METADATA_DIR + UUID + '.conf', 'w') as conf:
+                            config_object.write(conf)
+
+                        return True
+
+                    # It can still request to extend lease if it is less than 3 min old
+                    else:
+                        timestamp_str = request_info[1]
+                        timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S.%f')
+
+                        current_time = datetime.now()
+                        time_on_top = math.floor((current_time - timestamp).total_seconds())
+
+                        if time_on_top <= ALLOWED_EXTENSION_TIME:
+                            self.insert_new_time(filename, commit_id)
+                            return True
+
+                    return False
+
+        def local_primary_write_commit(self, filename, commit_id, data):
+            config_object = ConfigParser()
+            config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
+            on_lease_info = config_object["ON_LEASE"]
+
+            for key, value in config_object.items('ON_LEASE'):
+                if key == filename:
+                    request_queue = list(value.split(';'))
+
+                    top_request = request_queue[0]
+                    request_info = top_request.split(',')
+
+                    # Commit Id does not Match Top request for file
+                    if commit_id != request_info[0]:
+                        raise ValueError("Commit Id does not match")
+
+                    # rewrite file on primary
+                    files_owned_dir = FILES_DIR + UUID + OWNED
+                    with open(files_owned_dir + str(filename), 'w') as f:
+                        f.write(data)
+
+                    # remove request from queue
+                    request_queue.remove(top_request)
+                    new_value = ';'.join(map(str, request_queue))
+                    on_lease_info[key] = new_value
+
+                    with open(METADATA_DIR + UUID + '.conf', 'w') as conf:
+                        config_object.write(conf)
+
+        def insert_new_time(self, filename, commit_id):
+            config_object = ConfigParser()
+            config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
+
+            on_lease_info = config_object["ON_LEASE"]
+
+            value = on_lease_info[filename]
+            request_queue = list(value.split(';'))
+            top_request = request_queue[0]
+
+            new_timestamp = datetime.now()
+            new_timestamp_str = new_timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")
+            new_top_request = commit_id + "," + new_timestamp_str
+
+            request_queue.remove(top_request)
+            request_queue.insert(new_top_request)
+
+            new_value = ';'.join(map(str, request_queue))
+            on_lease_info[filename] = new_value
+
+            with open(METADATA_DIR + UUID + '.conf', 'w') as conf:
+                config_object.write(conf)
 
         # Exposed Function, for Directory Service to check if file has been replicated locally
         def exposed_is_file_replicated(self, filename):
@@ -259,10 +541,9 @@ class HandlerService(rpyc.Service):
             config_object = ConfigParser()
             config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
 
-
             # Update Metadata Config
             files = config_object["FILES_OWNED"]
-            files[filename] = "NO"
+            files[filename] = ""
 
             with open(METADATA_DIR + UUID + '.conf', 'w') as conf:
                 config_object.write(conf)
@@ -323,115 +604,6 @@ class HandlerService(rpyc.Service):
             print("Updated File List for this Server")
             f = open(METADATA_DIR + UUID + ".conf", "r")
             print(f.read())
-
-        # *****************************************************Timer******************************
-
-        # Replicating the file locally, it updates the existing replica as
-        def exposed_get_primary_and_replicate(self,filename):
-            con1 = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
-            directory = con1.root.Directory()
-
-            primary_handler_addr = directory.get_primary_for_file(filename)
-            con = rpyc.connect(host=primary_handler_addr[0], port=primary_handler_addr[1])
-            primary_handler = con.root.Handler()
-            file_obj = primary_handler.replicated_read(filename)
-            # adding reference in primary owner about replicas
-            #ANANTAA: what is the conn attribute?
-
-            #list of handlers that have replica and need to be updated
-            primary_handler.files_owned[filename] = (socket.gethostbyname('localhost'), PORT)
-
-            #Here replica is getting updated if it exists locally on handler
-            if filename in files_replicated:
-                with open(DATA_DIR + str(filename), 'w') as file:
-                    file.write(file_obj)
-            #if replica is not already there on handler
-            else:
-                with open(DATA_DIR + str(filename), 'w') as file:
-                    file.write(file_obj)
-                files_replicated[filename] = primary_handler
-
-# broadcast from primary
-
-
-        # Timer to track leasing period
-        @timeout_decorator.timeout(30, timeout_exception="time ended for the lease")
-        def open_file(self, filename, data):
-            with open(DATA_DIR + str(filename), 'a+') as file:
-                file.write(data)
-            popped = leased_files.pop(0)
-            print("Write complete for client: ", popped)
-
-        @timeout_decorator.timeout(60, timeout_exception="time ended for the lease")
-        def open_file1(self, filename, data):
-            with open(DATA_DIR + str(filename), 'a+') as file:
-                file.write(data)
-            popped = leased_files.pop(0)
-            print("Write complete for client: ", popped)
-
-        def writefile(self, filename, data):
-            try:
-                leased_files[filename]= True
-                self.open_file(self, filename, data)
-            except timeout_decorator.timeout as timeout_exception:
-                answer = input("Need to extend the lease?")
-                if answer == 'YES' or answer == 'Yes' or answer == 'yes':
-                    try:
-                        self.open_file1(filename,data)
-                    except timeout_decorator.timeout as timeout_exception:
-                        print("write not finished in given time, no changes committed to the file.")
-                else:
-                    leased_files[filename] = False
-                    clients_in_queue[filename].pop(0)
-
-
-# **********************Initiate the write based on whether the file is present on current handler***************************
-
-        #make leased file a config
-        def Initiate_Write_RequestOnTop(self,filename,data):
-            global files_owned
-            # case1 : Current handler is primary owner
-            if filename in files_owned:
-                # checking if file is already leased:
-                if leased_files[filename] is False:
-                    self.writefile(filename, data)
-                # if the file is leased
-                elif leased_files[filename] is True:
-                    while leased_files[filename] is True:
-                        time.sleep(10)
-                    self.writefile(filename, data)
-
-            # case2 : Current handler is not the primary owner
-            elif filename not in files_owned:
-                # replicating file in below code along with status
-                self.exposed_get_primary_and_replicate(filename)
-                if leased_files[filename] is False:
-                    self.writefile(filename, data)
-                elif leased_files[filename] is True:
-                    while leased_files[filename].islocked:
-                        time.sleep(10)
-                    self.writefile(filename, data)
-
-                    # push to primary
-
-        def exposed_write(self, filename, data, clientip=None, clientsocket=None):
-            #ANANTAA: what is the conn attribute?
-            s_ClientAdress, s_ClientPort = HandlerService.stuff()
-
-            index = clients_in_queue[filename].index(clients_in_queue[filename].append([s_ClientAdress, s_ClientPort,data]))
-            # we are using lamport's clock logic, checking if the just now appended request is at index 0
-            if index == 0:
-                #we call Initiate_Write_RequestOnTop function
-                self.Initiate_Write_RequestOnTop(self,filename,data)
-            else:
-                # we check if request is on top after 10secs sleep
-                while(clients_in_queue[filename].index([s_ClientAdress, s_ClientPort,data]) != 0):
-                    time.sleep(10)
-
-                self.Initiate_Write_RequestOnTop(self, filename, data)
-
-# *****************************************************Timer******************************
-
 
 if __name__ == "__main__":
     startup()

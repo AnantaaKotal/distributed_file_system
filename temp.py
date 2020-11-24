@@ -35,5 +35,12 @@ def file_open():
     p = subprocess.call(['open', '-a', 'TextEdit', "/Users/anantaa/Desktop/python/dist_sys/config/handlr_addr.conf"])
     print("You done?")
 
+def list_concat():
+    my_lst = [1]
+    my_lst.insert(0, 6)
+    my_lst_str = ';'.join(map(str, my_lst))
 
-file_open()
+    print(my_lst_str)
+
+
+list_concat()
