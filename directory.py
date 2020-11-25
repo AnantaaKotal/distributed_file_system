@@ -85,9 +85,38 @@ class DirectoryService(rpyc.Service):
                 config_object.write(conf)
             return False
 
+        def exposed_get_primary_from_dict(self, filename):
+            return self.local_get_primary_from_dict(filename)
+
         # Exposed Function for Clients to get primary
         def exposed_get_primary_for_file(self, filename):
-            return self.local_get_primary_for_file(filename)
+            while True:
+                addr = self.local_get_primary_from_dict(filename)
+
+                if addr == "None":
+                    return "None"
+                host = addr[0]
+                port = addr[1]
+
+                # Check if Primary is active
+                if self.is_Handler_live(host, port):
+                    # print("Handler Live")
+                    try:
+                        con = rpyc.connect(host, port)
+                        con.close()
+                        return host, port
+                    except ConnectionError:
+                        # print("Connection Error")
+                        addr = self.reassign_primary(host, port, filename)
+                        if addr is None:
+                            return None
+                        return addr
+                else:
+                    # print("Handler Not live")
+                    addr = self.reassign_primary(host, port, filename)
+                    if addr is None:
+                        return None
+                    return addr
 
         #Removes File from record upon deletion
         def exposed_delete_file_from_record(self,filename):
@@ -99,27 +128,8 @@ class DirectoryService(rpyc.Service):
             with open(CONFIG_DIR + 'file_list.conf', 'w') as conf:
                 config_object.write(conf)
 
-        # returns the primary for file; reassigns inactive primary if required.
-        def local_get_primary_for_file(self, filename):
-            handlr_addr = self.get_primary_from_dict(filename)
-
-            # FILE NOT FOUND
-            if handlr_addr == "None":
-                return "None"
-
-            host = handlr_addr[0]
-            port = handlr_addr[1]
-
-            # Check if Primary is active
-            try:
-                con = rpyc.connect(host, port)
-                return host, port
-            except ConnectionError:
-                self.reassign_primary(host, port)
-                return self.local_get_primary_for_file(filename)
-
         # Returns Primary Handler Address from file_list.conf
-        def get_primary_from_dict(self, filename):
+        def local_get_primary_from_dict(self, filename):
             conf = ConfigParser()
             conf.read_file(open(CONFIG_DIR + 'file_list.conf'))
 
@@ -132,11 +142,26 @@ class DirectoryService(rpyc.Service):
 
             return "None"
 
+        def is_Handler_live(self, host, port):
+            addr = host + "," + port
+
+            conf_live = ConfigParser()
+            conf_live.read_file(open(CONFIG_DIR + 'handlr_addr.conf'))
+            handler_addr_list = list(conf_live.items('HANDLERS'))
+
+            for key, value in handler_addr_list:
+                if key == addr:
+                    fname, isLive = value.split(',')
+                    if isLive == "Y":
+                        return True
+
+            return False
+
         # Returns a List of Live handlers
         def get_live_handler(self):
-            conf = ConfigParser()
-            conf.read_file(open(CONFIG_DIR + 'handlr_addr.conf'))
-            handler_addr_list = list(conf.items('HANDLERS'))
+            conf_live = ConfigParser()
+            conf_live.read_file(open(CONFIG_DIR + 'handlr_addr.conf'))
+            handler_addr_list = list(conf_live.items('HANDLERS'))
 
             live_handlrs = []
 
@@ -155,56 +180,72 @@ class DirectoryService(rpyc.Service):
                 return host, port
 
         # Reassigns Primary when Handler is inactive
-        def reassign_primary(self, handler_host, handler_port):
+        def reassign_primary(self, handler_host, handler_port, filename):
+            # print("Reassigning primary")
             # Mark handler as inactive
             self.mark_handler_as_inactive(handler_host, handler_port)
 
-            # Reassign the files owned
-            handler_addr = str(handler_host) + "," + str(handler_port)
+            new_addr = self.reassign_file(filename)
+            if new_addr is None:
+                return None
 
-            config = ConfigParser()
-            config.read_file(open(CONFIG_DIR + 'file_list.conf'))
+            config_primary = ConfigParser()
+            config_primary.read_file(open(CONFIG_DIR + 'file_list.conf'))
 
-            file_info = config["FILE_INFO"]
+            file_info = config_primary["FILE_INFO"]
 
-            for fname, addr in config.items('FILE_INFO'):
-                if addr == handler_addr:
-                    new_addr = self.reassign_file(fname)
-                    file_info[fname] = new_addr
+            new_addr_str = str(new_addr[0]) + "," + str(new_addr[1])
+            for fname, addr in config_primary.items('FILE_INFO'):
+                if fname == filename:
+                    file_info[fname] = new_addr_str
 
             # Finally update config file with new primary
             with open(CONFIG_DIR + 'file_list.conf', 'w') as conf:
-                config.write(conf)
+                config_primary.write(conf)
 
+            return new_addr
 
         # Finds a new primary Handler for file
         def reassign_file(self, filename):
-            host, port = self.get_live_handler()
-            con = rpyc.connect(host, port)
-            handler = con.root.Handler()
+            is_file_replicated = False
+            i = 0
 
-            if handler.is_file_replicated(filename):
+            # Tries 3 times
+            while not is_file_replicated and i<3:
+                host, port = self.get_live_handler()
+                con = rpyc.connect(host, port)
+                handler = con.root.Handler()
+                is_file_replicated = handler.is_file_replicated(filename)
+                # print("file replicated at:" + str(host) + str(port))
+                con.close()
+                i += 1
+
+            if is_file_replicated:
+                con = rpyc.connect(host, port)
+                handler = con.root.Handler()
+                # print("Making Handler primary" + str(host) + str(port))
                 handler.make_primary(filename)
+                con.close()
                 return host, port
             else:
-                return self.reassign_file(filename)
+                return None
 
         # Marks handler as inactive
         def mark_handler_as_inactive(self, handler_host, handler_port):
             handler_addr = str(handler_host) + "," + str(handler_port)
 
-            config_object = ConfigParser()
-            config_object.read_file(open(CONFIG_DIR + 'handlr_addr.conf'))
+            config_object_inactive = ConfigParser()
+            config_object_inactive.read_file(open(CONFIG_DIR + 'handlr_addr.conf'))
 
-            for key, value in config_object.items('HANDLERS'):
+            for key, value in config_object_inactive.items('HANDLERS'):
                 if key == handler_addr:
                     fname, isLive = value.split(',')
                     value = fname + ",N"
 
-                    handler_info = config_object["HANDLERS"]
+                    handler_info = config_object_inactive["HANDLERS"]
                     handler_info[handler_addr] = value
                     with open(CONFIG_DIR + 'handlr_addr.conf', 'w') as conf:
-                        config_object.write(conf)
+                        config_object_inactive.write(conf)
 
 
         '''Code to append ip and socket details of the client

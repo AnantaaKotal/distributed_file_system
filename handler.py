@@ -30,7 +30,7 @@ FILES_DIR = str(pathlib.Path().absolute()) + "/files/"
 OWNED = "/owned/"
 REPLICATED = "/replicated/"
 
-LEASE_TIME = 60
+LEASE_TIME = 30
 ALLOWED_EXTENSION_TIME = 2 * LEASE_TIME
 
 
@@ -38,6 +38,7 @@ def get_ip_address():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.connect(("8.8.8.8", 80))
     return s.getsockname()[0]
+
 
 # Report to Directory upon start
 def report_self_to_directory(port):
@@ -53,15 +54,62 @@ def report_self_to_directory(port):
     print("Identifier: " + UUID)
 
     if isRegistered:
+        conf = ConfigParser()
+        conf.read_file(open(METADATA_DIR + UUID + '.conf'))
+        files_owned_list = list(conf.items('FILES_OWNED'))
+
+        con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+        directory = con.root.Directory()
+
+        host = str(get_ip_address())
+        port = str(PORT)
+
+        files_owned_dir = FILES_DIR + UUID + OWNED
+        files_replicated_dir = FILES_DIR + UUID + REPLICATED
+
+        for key, value in files_owned_list:
+            new_primary = directory.get_primary_from_dict(key)
+
+            # FILE HAS BEEN DELETED: DELETE LOCALLY
+            if new_primary == "None":
+                print("Deleting locally")
+                os.remove(files_owned_dir + str(key))
+                conf.remove_option('FILES_OWNED', key)
+
+            # FILE HAS BEEN REASSIGNED: MOVE TO REPLICA
+            elif host != new_primary[0] or port != new_primary[1]:
+                print("Getting replica from new primary")
+                os.remove(files_owned_dir + str(key))
+                conf.remove_option('FILES_OWNED', key)
+
+                con = rpyc.connect(host=new_primary[0], port=new_primary[1])
+                primary_handler = con.root.Handler()
+
+                file_obj = primary_handler.replicated_read(key)
+
+                with open(files_replicated_dir + str(key), 'w') as f:
+                    f.write(file_obj)
+
+                # Add timestamp for replication
+                current_time = datetime.now()
+                current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+                files_replicated_info = conf["FILES_REPLICATED"]
+                files_replicated_info[key] = current_time_str
+
+        with open(METADATA_DIR + UUID + '.conf', 'w') as config_obj:
+            conf.write(config_obj)
+
         f = open(METADATA_DIR + fname + ".conf", "r")
         print(f.read())
+
     else:
-        config_object = ConfigParser()
-        config_object[files_owned] = {}
-        config_object[files_replicated] = {}
-        config_object[on_lease] = {}
-        with open(METADATA_DIR + fname + ".conf", 'w') as conf:
-            config_object.write(conf)
+        conf = ConfigParser()
+        conf[files_owned] = {}
+        conf[files_replicated] = {}
+        conf[on_lease] = {}
+        with open(METADATA_DIR + fname + ".conf", 'w') as conf_1:
+            conf.write(conf_1)
 
         os.mkdir(FILES_DIR + UUID)
         os.mkdir(FILES_DIR + UUID + OWNED)
@@ -146,9 +194,14 @@ class HandlerService(rpyc.Service):
                 except ValueError:
                     raise ValueError("FILE NOT FOUND")
 
-        def exposed_delete(self, filename):
+        def exposed_delete(self, filename, commit_id):
             # !!!! Add queueing logic
             if self.local_is_file_owned(filename):
+                try:
+                    self.remove_top_request_from_lease_queue(filename, commit_id)
+                except ValueError as e:
+                    raise e
+
                 # delete file
                 files_owned_dir = FILES_DIR + UUID + OWNED
                 os.remove(files_owned_dir + str(filename))
@@ -196,12 +249,18 @@ class HandlerService(rpyc.Service):
         # ***********************************************************************************
 
         # Pessimistic write protocol including leasing logic
-        def exposed_write_request(self, filename, commit_id):
-            timestamp = datetime.now()
-            timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")
+        def exposed_write_request(self, filename, commit_id, timestamp_str=None):
+            if timestamp_str is None:
+                timestamp = datetime.now()
+                timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")
 
             if self.local_is_file_owned(filename):
-                self.local_primary_write_queue(filename, commit_id, timestamp_str)
+                write_info = self.local_primary_write_queue(filename, commit_id, timestamp_str)
+
+                if write_info is None:
+                    return None
+
+                return write_info, timestamp_str
             else:
                 con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
                 directory = con.root.Directory()
@@ -214,32 +273,16 @@ class HandlerService(rpyc.Service):
 
                     write_info = primary_handler.primary_write_queue(filename, commit_id, timestamp_str)
 
-                    if write_info is None:
-                        return None
-                    ready_to_write = write_info[0]
+                    return write_info, timestamp_str
 
-                    while not ready_to_write:
-                        queue_number = write_info[1]
-                        sleep_time = (30 * int(queue_number))
-                        time.sleep(sleep_time)
-                        write_info = primary_handler.primary_write_queue(filename, commit_id, timestamp_str)
-
-                        # In case file is deleted by previous action on queue
-                        if write_info is None:
-                            return None
-                        ready_to_write = write_info[0]
-
-                    lease_time = write_info[1]
-                    file_data = write_info[2]
-
-                    return lease_time, file_data
                 else:
                     return None
 
-
         def exposed_extend_lease(self, filename, commit_id):
             if self.local_is_file_owned(filename):
-                return self.local_extend_lease(filename, commit_id)
+                can_extend = self.local_extend_lease(filename, commit_id)
+                print(can_extend)
+                return can_extend, LEASE_TIME
             else:
                 con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
                 directory = con.root.Directory()
@@ -250,7 +293,8 @@ class HandlerService(rpyc.Service):
                     con = rpyc.connect(host=primary_handler_addr[0], port=primary_handler_addr[1])
                     primary_handler = con.root.Handler()
 
-                    return primary_handler.primary_extend_lease(filename, commit_id)
+                    can_extend = primary_handler.primary_extend_lease(filename, commit_id)
+                    return can_extend, LEASE_TIME
 
 
         def exposed_write(self, filename, commit_id, data):
@@ -364,8 +408,7 @@ class HandlerService(rpyc.Service):
 
                             return False, queue_position
 
-
-                # No Lease Queue for fileName; create new; return true
+                # No Lease Queue for fileName or queue is empty; create new; return true
                 request_queue = list()
                 request_queue.append(lease_queue_entry)
 
@@ -379,6 +422,7 @@ class HandlerService(rpyc.Service):
                 with open(files_owned_dir + str(filename), 'r') as f:
                     data = f.read()
 
+                # print("I WAS HERE" + data)
                 return True, LEASE_TIME, data
 
         def local_extend_lease(self, filename, commit_id):
@@ -430,6 +474,17 @@ class HandlerService(rpyc.Service):
                     return False
 
         def local_primary_write_commit(self, filename, commit_id, data):
+            try:
+                self.remove_top_request_from_lease_queue(filename, commit_id)
+
+                # rewrite file on primary
+                files_owned_dir = FILES_DIR + UUID + OWNED
+                with open(files_owned_dir + str(filename), 'w') as f:
+                    f.write(data)
+            except ValueError as e:
+                raise e
+
+        def remove_top_request_from_lease_queue(self, filename, commit_id):
             config_object = ConfigParser()
             config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
             on_lease_info = config_object["ON_LEASE"]
@@ -445,41 +500,40 @@ class HandlerService(rpyc.Service):
                     if commit_id != request_info[0]:
                         raise ValueError("Commit Id does not match")
 
-                    # rewrite file on primary
-                    files_owned_dir = FILES_DIR + UUID + OWNED
-                    with open(files_owned_dir + str(filename), 'w') as f:
-                        f.write(data)
-
-                    # remove request from queue
                     request_queue.remove(top_request)
-                    new_value = ';'.join(map(str, request_queue))
-                    on_lease_info[key] = new_value
+
+                    if len(request_queue) == 0:
+                        config_object.remove_option('ON_LEASE', key)
+                    else:
+                        new_value = ';'.join(map(str, request_queue))
+                        on_lease_info[key] = new_value
 
                     with open(METADATA_DIR + UUID + '.conf', 'w') as conf:
                         config_object.write(conf)
 
+
         def insert_new_time(self, filename, commit_id):
-            config_object = ConfigParser()
-            config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
+                config_object = ConfigParser()
+                config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
 
-            on_lease_info = config_object["ON_LEASE"]
+                on_lease_info = config_object["ON_LEASE"]
 
-            value = on_lease_info[filename]
-            request_queue = list(value.split(';'))
-            top_request = request_queue[0]
+                value = on_lease_info[filename]
+                request_queue = list(value.split(';'))
+                top_request = request_queue[0]
 
-            new_timestamp = datetime.now()
-            new_timestamp_str = new_timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")
-            new_top_request = commit_id + "," + new_timestamp_str
+                new_timestamp = datetime.now()
+                new_timestamp_str = new_timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")
+                new_top_request = commit_id + "," + new_timestamp_str
 
-            request_queue.remove(top_request)
-            request_queue.insert(new_top_request)
+                request_queue.remove(top_request)
+                request_queue.insert(0, new_top_request)
 
-            new_value = ';'.join(map(str, request_queue))
-            on_lease_info[filename] = new_value
+                new_value = ';'.join(map(str, request_queue))
+                on_lease_info[filename] = new_value
 
-            with open(METADATA_DIR + UUID + '.conf', 'w') as conf:
-                config_object.write(conf)
+                with open(METADATA_DIR + UUID + '.conf', 'w') as conf:
+                    config_object.write(conf)
 
         # Exposed Function, for Directory Service to check if file has been replicated locally
         def exposed_is_file_replicated(self, filename):
@@ -535,6 +589,7 @@ class HandlerService(rpyc.Service):
 
                     if diff <= 30:
                         return True
+
             return False
 
         def local_file_create(self, filename, data):

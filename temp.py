@@ -5,6 +5,7 @@ from configparser import ConfigParser
 import webbrowser
 import os
 import subprocess
+import timeout_decorator
 
 path = '/Users/anantaa/Desktop/python/dist_sys/config/metadata/iyyjzmzz.conf'
 file_section = 'FILES_REPLICATED'
@@ -43,4 +44,28 @@ def list_concat():
     print(my_lst_str)
 
 
-list_concat()
+import signal
+USER_INPUT_TIMEOUT = 5 # number of seconds your want for timeout
+
+
+def interrupt(signum, frame):
+    print("Didn't recieve user input.")
+
+
+@timeout_decorator.timeout(5, timeout_exception="time ended for the lease")
+def timed_input():
+    s = input('Ready to commit?')
+    return s
+
+
+
+def input_sleep_try():
+    try:
+        input = timed_input()
+        print(input)
+    except:
+        print("\ncommitting..")
+
+
+
+input_sleep_try()
