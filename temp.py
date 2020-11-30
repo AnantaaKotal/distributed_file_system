@@ -66,6 +66,15 @@ def input_sleep_try():
     except:
         print("\ncommitting..")
 
+import sched, time
+s = sched.scheduler(time.time, time.sleep)
 
+def do_something(sc):
+    print("Doing stuff...")
+    # do your stuff
+    s.enter(10, 1, do_something, (sc,))
 
-input_sleep_try()
+s.enter(10, 1, do_something, (s,))
+s.run()
+
+# input_sleep_try()

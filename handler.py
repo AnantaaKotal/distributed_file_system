@@ -12,7 +12,12 @@ import socket
 
 #Directory Address
 DIRECTORY_ADDR = 'localhost'
-DIRECTORY_PORT = 12345
+DIRECTORY_PORT = 12346
+
+# backup_directory_address
+BACKUP_DIRECTORY_ADDR = 'localhost'
+BACKUP_DIRECTORY_PORT = 12346
+
 
 #DEFAULT PORT
 PORT = 8888
@@ -33,11 +38,20 @@ REPLICATED = "/replicated/"
 LEASE_TIME = 30
 ALLOWED_EXTENSION_TIME = 2 * LEASE_TIME
 
-
+# get self IP address
 def get_ip_address():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.connect(("8.8.8.8", 80))
     return s.getsockname()[0]
+
+# Connect to Directory
+def directory_connect():
+    try:
+        con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+        return con
+    except ConnectionError:
+        con = rpyc.connect(BACKUP_DIRECTORY_ADDR, port=BACKUP_DIRECTORY_PORT)
+        return con
 
 
 # Report to Directory upon start
@@ -45,9 +59,10 @@ def report_self_to_directory(port):
     global PORT
     PORT = port
 
-    con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+    con = directory_connect()
     directory = con.root.Directory()
     isRegistered, fname = directory.add_handler_address(get_ip_address(), port)
+    con.close()
 
     global UUID
     UUID = fname
@@ -58,7 +73,7 @@ def report_self_to_directory(port):
         conf.read_file(open(METADATA_DIR + UUID + '.conf'))
         files_owned_list = list(conf.items('FILES_OWNED'))
 
-        con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+        con = directory_connect()
         directory = con.root.Directory()
 
         host = str(get_ip_address())
@@ -117,7 +132,6 @@ def report_self_to_directory(port):
 
     print("Reported to Directory")
 
-
 # Handler Start up
 def startup():
     """Allows up to 3 ports to connect on the same machine"""
@@ -150,7 +164,7 @@ class HandlerService(rpyc.Service):
             raise TimeoutError
 
         def exposed_create(self, filename, data):
-            con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+            con = directory_connect()
             directory = con.root.Directory()
 
             fileNameExists = directory.add_file(filename, get_ip_address(), PORT)
@@ -217,12 +231,12 @@ class HandlerService(rpyc.Service):
                 self.print_on_update("Deleted")
 
                 # Tell Directory to delete file from list
-                con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+                con = directory_connect()
                 directory = con.root.Directory()
                 directory.delete_file_from_record(filename)
             else:
                 # Find the Primary Handler for file
-                con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+                con = directory_connect()
                 directory = con.root.Directory()
 
                 primary_handler_addr = directory.get_primary_for_file(filename)
@@ -262,7 +276,7 @@ class HandlerService(rpyc.Service):
 
                 return write_info, timestamp_str
             else:
-                con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+                con = directory_connect()
                 directory = con.root.Directory()
 
                 primary_handler_addr = directory.get_primary_for_file(filename)
@@ -284,7 +298,7 @@ class HandlerService(rpyc.Service):
                 print(can_extend)
                 return can_extend, LEASE_TIME
             else:
-                con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+                con = directory_connect()
                 directory = con.root.Directory()
 
                 primary_handler_addr = directory.get_primary_for_file(filename)
@@ -305,7 +319,7 @@ class HandlerService(rpyc.Service):
                     raise e
 
             else:
-                con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+                con = directory_connect()
                 directory = con.root.Directory()
 
                 primary_handler_addr = directory.get_primary_for_file(filename)
@@ -562,6 +576,52 @@ class HandlerService(rpyc.Service):
 
             self.print_on_update("Added")
 
+
+        def exposed_append(self):
+            # is file owned
+                # local_append
+            # else
+                # call primary
+                # exposed_primary_append
+                # get replica
+
+        def exposed_optimistic_write_request(self, filename):
+            # is file owned
+                # local_primary_optimistic_write_request
+            # else
+                # call primary
+                # exposed_primary_optimistic_write_request
+                # get new file + version id
+                # return file to client + version id
+
+        def exposed_optimistic_write_commit(self, filename, version_id):
+            # is file owned
+                # local_primary_optimistic_write_request
+            # else
+                # call primary
+                # can_commit = exposed_optimistic_write_commit
+                # if true:
+                    # update replica
+                    # return true
+                # return False
+
+        def exposed_primary_optimistic_write_request(self, filename):
+            # local_primary_optimistic_write_request
+
+        def exposed_optimistic_write_commit(self, filename, version_id):
+            # local_optimistic_write_commit
+
+        def local_primary_optimistic_write_request(self, filename):
+            # return file + version id
+
+        def local_optimistic_write_commit(self, filename, version_id):
+            # check file_config
+            # if file_version < version_id:
+                # update file
+                # update version
+                # return true
+            # return false
+
         # Checks if owner of file
         def local_is_file_owned(self, filename):
             config_object = ConfigParser()
@@ -613,7 +673,7 @@ class HandlerService(rpyc.Service):
         def replicate_file_for_read(self, filename):
             files_replicated_dir = FILES_DIR + UUID + REPLICATED
 
-            con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+            con = directory_connect()
             directory = con.root.Directory()
 
             primary_handler_addr = directory.get_primary_for_file(filename)
@@ -652,6 +712,10 @@ class HandlerService(rpyc.Service):
                     data = f.read()
 
                 return data
+
+
+
+
 
         def print_on_update(self, func):
             print("=====================================================")

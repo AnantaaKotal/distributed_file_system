@@ -16,6 +16,11 @@ from rpyc.utils.server import ThreadedServer
 
 CONFIG_DIR = str(pathlib.Path().absolute()) + "/config/"
 
+# backup_directory_address
+BACKUP_DIRECTORY_ADDR = 'localhost'
+BACKUP_DIRECTORY_PORT = 12346
+
+
 file_table = set()
 
 
@@ -248,11 +253,53 @@ class DirectoryService(rpyc.Service):
                         config_object_inactive.write(conf)
 
 
+        def exposed_backup(self):
+            print("Copying Data to Backup..")
+            with open(CONFIG_DIR + 'handlr_addr.conf', 'r') as f:
+                data_1 = f.read()
+
+            with open(CONFIG_DIR + 'file_list.conf', 'r') as f:
+                data_2 = f.read()
+
+            return data_1, data_2
+
         '''Code to append ip and socket details of the client
         s_ClientAdress, s_ClientPort=self._conn._config['endpoints'][1]
         '''
 
+def get_backup():
+    try:
+        print("Copying from backup")
+        con = rpyc.connect(BACKUP_DIRECTORY_ADDR, port=BACKUP_DIRECTORY_PORT)
+        directory = con.root.Directory()
+
+        conf_backup_1 = ConfigParser()
+        conf_backup_1.read_file(open(CONFIG_DIR + 'handlr_addr.conf'))
+        handler_version = int(conf_backup_1.get('VERSION', 'v'))
+
+        conf_backup_2 = ConfigParser()
+        conf_backup_2.read_file(open(CONFIG_DIR + 'file_list.conf'))
+        file_list_version = int(conf_backup_2.get('VERSION', 'v'))
+
+        handler_version_bk, file_list_version_bk, handlr_data, file_list_data = directory.get_from_backup()
+
+        if handler_version_bk > handler_version:
+            with open(CONFIG_DIR + 'handlr_addr.conf', 'w') as f:
+                f.write(handlr_data)
+
+        if file_list_version_bk > file_list_version:
+            with open(CONFIG_DIR + 'file_list.conf', 'w') as f:
+                f.write(file_list_data)
+
+        print("Closing Backup service")
+        directory.close()
+    except:
+        return
+
+
 if __name__ == "__main__":
     server = ThreadedServer(DirectoryService, port=12345)
+    get_backup()
+    print("Starting Service")
     server.start()
 
