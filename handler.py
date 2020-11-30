@@ -577,13 +577,65 @@ class HandlerService(rpyc.Service):
             self.print_on_update("Added")
 
 
-        def exposed_append(self):
-            # is file owned
-                # local_append
-            # else
-                # call primary
-                # exposed_primary_append
-                # get replica
+        def exposed_append(self, filename, data):
+            if self.local_is_file_owned(filename):
+                try:
+                    return self.local_primary_append(filename, data)
+                except ValueError as e:
+                    raise e
+
+            else:
+                con = directory_connect()
+                directory = con.root.Directory()
+
+                try:
+                    primary_handler_addr = directory.get_primary_for_file(filename)
+                    file_obj = primary_handler_addr.primary_append(filename, data)
+
+                    # update replica
+                    files_replicated_dir = FILES_DIR + UUID + REPLICATED
+
+                    with open(files_replicated_dir + str(filename), 'w') as f:
+                        f.write(file_obj)
+
+                    # Add timestamp for replication
+                    current_time = datetime.now()
+                    current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+                    config_object = ConfigParser()
+                    config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
+
+                    files_replicated_info = config_object["FILES_REPLICATED"]
+                    files_replicated_info[filename] = current_time_str
+
+                except ValueError as e:
+                    raise e
+
+
+        def exposed_primary_append(self, filename, data):
+            try:
+                return self.local_primary_append(filename, data)
+            except ValueError as e:
+                raise e
+
+        def local_primary_append(self, filename, data):
+            try:
+                # update version id
+                self.update_version(filename)
+
+                # rewrite file on primary
+                files_owned_dir = FILES_DIR + UUID + OWNED
+                with open(files_owned_dir + str(filename), 'a') as f:
+                    f.write(data)
+
+                with open(files_owned_dir + str(filename), 'r') as f1:
+                    file_obj = f1.read()
+
+                # return new file object
+                return file_obj
+            except ValueError as e:
+                raise e
+
 
         def exposed_optimistic_write_request(self, filename):
             # is file owned
@@ -633,6 +685,30 @@ class HandlerService(rpyc.Service):
                 if key == filename:
                     return True
             return False
+
+        def update_version(self, filename):
+            file_section = 'FILES_OWNED'
+            path = METADATA_DIR + UUID + '.conf'
+
+            config_object = ConfigParser()
+            config_object.read(path)
+
+            if config_object.has_option(file_section, filename):
+                file_version = config_object.get(file_section, filename)
+
+                if file_version == "":
+                    file_version = 1
+                else:
+                    file_version = int(file_version)
+                    file_version += 1
+
+                file_info = config_object[file_section]
+                file_info[filename] = str(file_version)
+
+                with open(path, 'w') as conf:
+                    config_object.write(conf)
+            else:
+                raise ValueError
 
         # Checks if file has been replicated locally
         def local_is_file_replicated(self, filename):

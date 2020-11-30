@@ -8,8 +8,8 @@ import subprocess
 import timeout_decorator
 
 path = '/Users/anantaa/Desktop/python/dist_sys/config/metadata/iyyjzmzz.conf'
-file_section = 'FILES_REPLICATED'
-file_name = 'file1'
+file_section = 'FILES_OWNED'
+file_name = 'file9'
 
 def date():
     old_time = datetime.now()
@@ -66,7 +66,7 @@ def input_sleep_try():
     except:
         print("\ncommitting..")
 
-import sched, time
+"""import sched, time
 s = sched.scheduler(time.time, time.sleep)
 
 def do_something(sc):
@@ -77,4 +77,36 @@ def do_something(sc):
 s.enter(10, 1, do_something, (s,))
 s.run()
 
-# input_sleep_try()
+# input_sleep_try()"""
+
+def append():
+    with open("temp.txt", "a") as file: # append mode
+        file.write(" data")
+
+def write():
+    with open("temp.txt", "w") as file: # append mode
+        file.write(" data")
+
+
+def has_option():
+    config_object = ConfigParser()
+    config_object.read(path)
+
+    if config_object.has_option(file_section, file_name):
+        file_version = config_object.get(file_section, file_name)
+
+        if file_version == "":
+            file_version = 1
+        else:
+            file_version = int(file_version)
+            file_version += 1
+
+        file_info = config_object[file_section]
+        file_info[file_name] = str(file_version)
+
+        with open(path, 'w') as conf:
+            config_object.write(conf)
+    else:
+        raise ValueError
+
+has_option()
