@@ -260,9 +260,9 @@ class HandlerService(rpyc.Service):
 
                 self.print_on_update("Deleted")
 
-        # ***********************************************************************************
+# ***********************************************************************************
 
-        # Pessimistic write protocol including leasing logic
+# Pessimistic write protocol including leasing logic
         def exposed_write_request(self, filename, commit_id, timestamp_str=None):
             if timestamp_str is None:
                 timestamp = datetime.now()
@@ -577,6 +577,10 @@ class HandlerService(rpyc.Service):
             self.print_on_update("Added")
 
 
+# ***********************************************************************************
+
+# Optimistic write protocol including append
+
         def exposed_append(self, filename, data):
             if self.local_is_file_owned(filename):
                 try:
@@ -608,9 +612,10 @@ class HandlerService(rpyc.Service):
                     files_replicated_info = config_object["FILES_REPLICATED"]
                     files_replicated_info[filename] = current_time_str
 
+                    return file_obj
+
                 except ValueError as e:
                     raise e
-
 
         def exposed_primary_append(self, filename, data):
             try:
@@ -636,43 +641,139 @@ class HandlerService(rpyc.Service):
             except ValueError as e:
                 raise e
 
-
         def exposed_optimistic_write_request(self, filename):
-            # is file owned
-                # local_primary_optimistic_write_request
-            # else
-                # call primary
-                # exposed_primary_optimistic_write_request
-                # get new file + version id
-                # return file to client + version id
+            if self.local_is_file_owned(filename):
+                try:
+                    return self.local_primary_optimistic_write_request(filename)
+                except ValueError as e:
+                    raise e
+            else:
+                con = directory_connect()
+                directory = con.root.Directory()
 
-        def exposed_optimistic_write_commit(self, filename, version_id):
-            # is file owned
-                # local_primary_optimistic_write_request
-            # else
-                # call primary
-                # can_commit = exposed_optimistic_write_commit
-                # if true:
+                try:
+                    # call primary
+                    primary_handler_addr = directory.get_primary_for_file(filename)
+
+                    # get new file + version id
+                    file_obj, version_id = primary_handler_addr.primary_optimistic_write_request(filename)
+
                     # update replica
-                    # return true
-                # return False
+                    files_replicated_dir = FILES_DIR + UUID + REPLICATED
+
+                    with open(files_replicated_dir + str(filename), 'w') as f:
+                        f.write(file_obj)
+
+                    current_time = datetime.now()
+                    current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+                    config_object = ConfigParser()
+                    config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
+
+                    files_replicated_info = config_object["FILES_REPLICATED"]
+                    files_replicated_info[filename] = current_time_str
+
+                    with open(files_replicated_dir + str(filename), 'r') as f1:
+                        data = f1.read()
+
+                    # return file to client + version id
+                    return data, version_id
+
+                except ValueError as e:
+                    raise e
+
+        def exposed_optimistic_write_commit(self, filename, new_version_id, data):
+            if self.local_is_file_owned(filename):
+                try:
+                    return self.local_optimistic_write_commit(filename)
+                except ValueError as e:
+                    raise e
+            else:
+                con = directory_connect()
+                directory = con.root.Directory()
+
+                try:
+                    # call primary
+                    primary_handler_addr = directory.get_primary_for_file(filename)
+                    commit_info = primary_handler_addr.optimistic_write_commit(filename, new_version_id, data)
+
+                    can_commit = commit_info[0]
+
+                    if can_commit:
+                        file_obj = commit_info[1]
+
+                        # update replica
+                        files_replicated_dir = FILES_DIR + UUID + REPLICATED
+
+                        with open(files_replicated_dir + str(filename), 'w') as f:
+                            f.write(file_obj)
+
+                        current_time = datetime.now()
+                        current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+                        config_object = ConfigParser()
+                        config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
+
+                        files_replicated_info = config_object["FILES_REPLICATED"]
+                        files_replicated_info[filename] = current_time_str
+
+                        return True
+
+                    else:
+                        return False
+
+                except ValueError as e:
+                    raise e
 
         def exposed_primary_optimistic_write_request(self, filename):
-            # local_primary_optimistic_write_request
+            try:
+                return self.local_primary_optimistic_write_request(filename)
+            except ValueError as e:
+                raise e
 
-        def exposed_optimistic_write_commit(self, filename, version_id):
-            # local_optimistic_write_commit
+        def exposed_optimistic_write_commit(self, filename, new_version_id, data):
+            try:
+                return self.local_optimistic_write_commit(filename)
+            except ValueError as e:
+                raise e
 
         def local_primary_optimistic_write_request(self, filename):
-            # return file + version id
+            try:
+                version_id = self.get_version(filename)
 
-        def local_optimistic_write_commit(self, filename, version_id):
-            # check file_config
-            # if file_version < version_id:
-                # update file
-                # update version
-                # return true
-            # return false
+                files_owned_dir = FILES_DIR + UUID + OWNED
+                with open(files_owned_dir + str(filename), 'r') as f1:
+                    file_obj = f1.read()
+
+                # return file + version id
+                return file_obj, version_id
+            except ValueError as e:
+                raise e
+
+        def local_optimistic_write_commit(self, filename, new_version_id, data):
+            try:
+                # check file_config
+                current_version_id = self.get_version(filename)
+
+                # if file_version < version_id:
+                if current_version_id < new_version_id:
+                    # update version id
+                    self.update_version(filename, new_version_id)
+
+                    # rewrite file on primary
+                    files_owned_dir = FILES_DIR + UUID + OWNED
+                    with open(files_owned_dir + str(filename), 'w') as f:
+                        f.write(data)
+
+                    with open(files_owned_dir + str(filename), 'r') as f1:
+                        file_obj = f1.read()
+
+                    # return True, new file object
+                    return True, file_obj
+                else:
+                    return False
+            except ValueError as e:
+                raise e
 
         # Checks if owner of file
         def local_is_file_owned(self, filename):
@@ -686,7 +787,36 @@ class HandlerService(rpyc.Service):
                     return True
             return False
 
-        def update_version(self, filename):
+        # update version id for file
+        def update_version(self, filename, new_version_id = None):
+            file_section = 'FILES_OWNED'
+            path = METADATA_DIR + UUID + '.conf'
+
+            config_object = ConfigParser()
+            config_object.read(path)
+
+            if config_object.has_option(file_section, filename):
+                file_version = config_object.get(file_section, filename)
+
+                if new_version_id is None:
+                    if file_version == "":
+                        file_version = 1
+                    else:
+                        file_version = int(file_version)
+                        file_version += 1
+                else:
+                    file_version = new_version_id
+
+                file_info = config_object[file_section]
+                file_info[filename] = str(file_version)
+
+                with open(path, 'w') as conf:
+                    config_object.write(conf)
+            else:
+                raise ValueError
+
+        # returns version id for file
+        def get_version(self, filename):
             file_section = 'FILES_OWNED'
             path = METADATA_DIR + UUID + '.conf'
 
@@ -697,16 +827,10 @@ class HandlerService(rpyc.Service):
                 file_version = config_object.get(file_section, filename)
 
                 if file_version == "":
-                    file_version = 1
+                    return 0
                 else:
                     file_version = int(file_version)
-                    file_version += 1
-
-                file_info = config_object[file_section]
-                file_info[filename] = str(file_version)
-
-                with open(path, 'w') as conf:
-                    config_object.write(conf)
+                    return file_version
             else:
                 raise ValueError
 

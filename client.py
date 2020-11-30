@@ -9,8 +9,13 @@ import time
 import signal
 import timeout_decorator
 
-DIRECTORY_ADDR = "localhost"
-DIRECTORY_PORT = 12345
+#Directory Address
+DIRECTORY_ADDR = 'localhost'
+DIRECTORY_PORT = 12346
+
+# backup_directory_address
+BACKUP_DIRECTORY_ADDR = 'localhost'
+BACKUP_DIRECTORY_PORT = 12346
 
 TEMP_DIR = str(pathlib.Path().absolute()) + "/tmp/"
 
@@ -184,10 +189,64 @@ def delete(handler, filename):
     except ValueError:
         print("File Not found")
 
+# Append to file
+def append(handler, filename, data):
+    try:
+        new_data = handler.append(filename, data)
+        print(new_data)
+    except ValueError as e:
+        print("File not found")
 
+# Optimistic write
+def overwrite(handler, filename):
+    try:
+        data, version_id = handler.optimistic_write_request(filename)
+
+        # Creating temp file on Client machine
+        if not os.path.exists(TEMP_DIR):
+            os.mkdir(TEMP_DIR)
+
+        with open(TEMP_DIR + str(filename), 'w') as f:
+            f.write(data)
+
+        print("*****************OPTIMISTIC WRITE***********************")
+        p = subprocess.call(['open', '-a', 'TextEdit', TEMP_DIR + str(filename)])
+
+        keyboard_interrupt = input("Press any key when done..")
+
+        with open(TEMP_DIR + str(filename), 'r') as f:
+            data = f.read()
+
+        new_version_id = version_id + 1
+
+        try:
+            can_write = handler.optimistic_write_commit(filename, new_version_id, data)
+
+            if can_write:
+                print("Write completed successfully")
+            else:
+                print("Your file version is out of data")
+                print("Please sync before writing")
+        except ValueError as e:
+            print("Error Writing")
+            print(e)
+            print("Try again later")
+    except ValueError as e:
+        print("Error writing")
+
+# Connect to Directory
+def directory_connect():
+    try:
+        con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+        return con
+    except ConnectionError:
+        con = rpyc.connect(BACKUP_DIRECTORY_ADDR, port=BACKUP_DIRECTORY_PORT)
+        return con
+
+# Connect to Handler
 def try_handler_connect():
     # Request Connection to Directory
-    con_primary = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
+    con_primary = directory_connect()
     directory = con_primary.root.Directory()
     handler_addr = directory.connect_request_client()
 
@@ -198,6 +257,7 @@ def try_handler_connect():
         con_handler = rpyc.connect(host=handler_addr[0], port=handler_addr[1])
         handler = con_handler.root.Handler()
         return handler, handler_addr
+
 
 
 
@@ -229,6 +289,10 @@ def main():
                 write(handler, filename=args[1])
             elif args[0] == "delete":
                 delete(handler, filename=args[1])
+            elif args[0] == "append":
+                append(handler, filename=args[1], data=args[2])
+            elif args[0] == "overwrite":
+                overwrite(handler, filename=args[1])
             else:
                 print("Error reading client request")
 
