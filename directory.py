@@ -32,7 +32,7 @@ def get_random_string():
 
 class DirectoryService(rpyc.Service):
     class exposed_Directory():
-        # Adds Handles Address to list upon registration
+        # Adds Handler Address to list upon registration
         def exposed_add_handler_address(self, handler_host, handler_port):
             config_object = ConfigParser()
             config_object.read_file(open(CONFIG_DIR + 'handlr_addr.conf'))
@@ -45,6 +45,14 @@ class DirectoryService(rpyc.Service):
 
                     handler_info = config_object["HANDLERS"]
                     handler_info[handler_addr] = value
+
+                    # UPDATE VERSION ID
+                    handler_version = int(config_object.get('VERSION', 'v'))
+                    new_handler_version = handler_version + 1
+
+                    version_info = config_object["VERSION"]
+                    version_info["v"] = str(new_handler_version)
+
                     with open(CONFIG_DIR + 'handlr_addr.conf', 'w') as conf:
                         config_object.write(conf)
 
@@ -53,6 +61,14 @@ class DirectoryService(rpyc.Service):
             handler_info = config_object["HANDLERS"]
             uuid = get_random_string()
             handler_info[handler_addr] = uuid + ",Y"
+
+            # UPDATE VERSION ID
+            handler_version = int(config_object.get('VERSION', 'v'))
+            new_handler_version = handler_version + 1
+
+            version_info = config_object["VERSION"]
+            version_info["v"] = str(new_handler_version)
+
             with open(CONFIG_DIR + 'handlr_addr.conf', 'w') as conf:
                 config_object.write(conf)
 
@@ -86,6 +102,14 @@ class DirectoryService(rpyc.Service):
 
             file_info = config_object["FILE_INFO"]
             file_info[filename] = handler_addr
+
+            # UPDATE VERSION ID
+            file_list_version = int(config_object.get('VERSION', 'v'))
+            new_file_list_version = file_list_version + 1
+
+            version_info = config_object["VERSION"]
+            version_info["v"] = str(new_file_list_version)
+
             with open(CONFIG_DIR + 'file_list.conf', 'w') as conf:
                 config_object.write(conf)
             return False
@@ -129,6 +153,13 @@ class DirectoryService(rpyc.Service):
             config_object.read_file(open(CONFIG_DIR + 'file_list.conf'))
 
             config_object.remove_option('FILE_INFO', filename)
+
+            # UPDATE VERSION ID
+            file_list_version = int(config_object.get('VERSION', 'v'))
+            new_file_list_version = file_list_version + 1
+
+            version_info = config_object["VERSION"]
+            version_info["v"] = str(new_file_list_version)
 
             with open(CONFIG_DIR + 'file_list.conf', 'w') as conf:
                 config_object.write(conf)
@@ -204,6 +235,13 @@ class DirectoryService(rpyc.Service):
                 if fname == filename:
                     file_info[fname] = new_addr_str
 
+                    # UPDATE VERSION ID
+                    file_list_version = int(config_primary.get('VERSION', 'v'))
+                    new_file_list_version = file_list_version + 1
+
+                    version_info = config_primary["VERSION"]
+                    version_info["v"] = str(new_file_list_version)
+
             # Finally update config file with new primary
             with open(CONFIG_DIR + 'file_list.conf', 'w') as conf:
                 config_primary.write(conf)
@@ -249,6 +287,14 @@ class DirectoryService(rpyc.Service):
 
                     handler_info = config_object_inactive["HANDLERS"]
                     handler_info[handler_addr] = value
+
+                    # UPDATE VERSION ID
+                    handler_version = int(config_object_inactive.get('VERSION', 'v'))
+                    new_handler_version = handler_version + 1
+
+                    version_info = config_object_inactive["VERSION"]
+                    version_info["v"] = str(new_handler_version)
+
                     with open(CONFIG_DIR + 'handlr_addr.conf', 'w') as conf:
                         config_object_inactive.write(conf)
 
@@ -263,9 +309,6 @@ class DirectoryService(rpyc.Service):
 
             return data_1, data_2
 
-        '''Code to append ip and socket details of the client
-        s_ClientAdress, s_ClientPort=self._conn._config['endpoints'][1]
-        '''
 
 def get_backup():
     try:
