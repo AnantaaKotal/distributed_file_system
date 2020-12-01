@@ -12,7 +12,7 @@ import socket
 
 #Directory Address
 DIRECTORY_ADDR = 'localhost'
-DIRECTORY_PORT = 12346
+DIRECTORY_PORT = 12345
 
 # backup_directory_address
 BACKUP_DIRECTORY_ADDR = 'localhost'
@@ -47,9 +47,11 @@ def get_ip_address():
 # Connect to Directory
 def directory_connect():
     try:
+        print("Trying Main Connect")
         con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
         return con
     except ConnectionError:
+        print("Trying Backup Connect")
         con = rpyc.connect(BACKUP_DIRECTORY_ADDR, port=BACKUP_DIRECTORY_PORT)
         return con
 
@@ -309,6 +311,8 @@ class HandlerService(rpyc.Service):
 
                     can_extend = primary_handler.primary_extend_lease(filename, commit_id)
                     return can_extend, LEASE_TIME
+                else:
+                    raise ValueError
 
 
         def exposed_write(self, filename, commit_id, data):
@@ -332,6 +336,8 @@ class HandlerService(rpyc.Service):
                         primary_handler.primary_write_commit(filename, commit_id, data)
                     except ValueError as e:
                         raise e
+                else:
+                    raise ValueError
 
                 # update local replica
                 files_replicated_dir = FILES_DIR + UUID + REPLICATED
@@ -594,25 +600,32 @@ class HandlerService(rpyc.Service):
 
                 try:
                     primary_handler_addr = directory.get_primary_for_file(filename)
-                    file_obj = primary_handler_addr.primary_append(filename, data)
 
-                    # update replica
-                    files_replicated_dir = FILES_DIR + UUID + REPLICATED
+                    if primary_handler_addr != "None":
+                        con = rpyc.connect(host=primary_handler_addr[0], port=primary_handler_addr[1])
+                        primary_handler = con.root.Handler()
 
-                    with open(files_replicated_dir + str(filename), 'w') as f:
-                        f.write(file_obj)
+                        file_obj = primary_handler.primary_append(filename, data)
 
-                    # Add timestamp for replication
-                    current_time = datetime.now()
-                    current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S.%f")
+                        # update replica
+                        files_replicated_dir = FILES_DIR + UUID + REPLICATED
 
-                    config_object = ConfigParser()
-                    config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
+                        with open(files_replicated_dir + str(filename), 'w') as f:
+                            f.write(file_obj)
 
-                    files_replicated_info = config_object["FILES_REPLICATED"]
-                    files_replicated_info[filename] = current_time_str
+                        # Add timestamp for replication
+                        current_time = datetime.now()
+                        current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S.%f")
 
-                    return file_obj
+                        config_object = ConfigParser()
+                        config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
+
+                        files_replicated_info = config_object["FILES_REPLICATED"]
+                        files_replicated_info[filename] = current_time_str
+
+                        return file_obj
+                    else:
+                        raise ValueError
 
                 except ValueError as e:
                     raise e
@@ -655,52 +668,12 @@ class HandlerService(rpyc.Service):
                     # call primary
                     primary_handler_addr = directory.get_primary_for_file(filename)
 
-                    # get new file + version id
-                    file_obj, version_id = primary_handler_addr.primary_optimistic_write_request(filename)
+                    if primary_handler_addr != "None":
+                        con = rpyc.connect(host=primary_handler_addr[0], port=primary_handler_addr[1])
+                        primary_handler = con.root.Handler()
 
-                    # update replica
-                    files_replicated_dir = FILES_DIR + UUID + REPLICATED
-
-                    with open(files_replicated_dir + str(filename), 'w') as f:
-                        f.write(file_obj)
-
-                    current_time = datetime.now()
-                    current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S.%f")
-
-                    config_object = ConfigParser()
-                    config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
-
-                    files_replicated_info = config_object["FILES_REPLICATED"]
-                    files_replicated_info[filename] = current_time_str
-
-                    with open(files_replicated_dir + str(filename), 'r') as f1:
-                        data = f1.read()
-
-                    # return file to client + version id
-                    return data, version_id
-
-                except ValueError as e:
-                    raise e
-
-        def exposed_optimistic_write_commit(self, filename, new_version_id, data):
-            if self.local_is_file_owned(filename):
-                try:
-                    return self.local_optimistic_write_commit(filename)
-                except ValueError as e:
-                    raise e
-            else:
-                con = directory_connect()
-                directory = con.root.Directory()
-
-                try:
-                    # call primary
-                    primary_handler_addr = directory.get_primary_for_file(filename)
-                    commit_info = primary_handler_addr.optimistic_write_commit(filename, new_version_id, data)
-
-                    can_commit = commit_info[0]
-
-                    if can_commit:
-                        file_obj = commit_info[1]
+                        # get new file + version id
+                        file_obj, version_id = primary_handler.primary_optimistic_write_request(filename)
 
                         # update replica
                         files_replicated_dir = FILES_DIR + UUID + REPLICATED
@@ -717,11 +690,63 @@ class HandlerService(rpyc.Service):
                         files_replicated_info = config_object["FILES_REPLICATED"]
                         files_replicated_info[filename] = current_time_str
 
-                        return True
+                        with open(files_replicated_dir + str(filename), 'r') as f1:
+                            data = f1.read()
 
+                        # return file to client + version id
+                        return data, version_id
                     else:
-                        return False
+                        raise ValueError
 
+                except ValueError as e:
+                    raise e
+
+        def exposed_optimistic_write_commit(self, filename, new_version_id, data):
+            if self.local_is_file_owned(filename):
+                try:
+                    return self.local_optimistic_write_commit(filename, new_version_id, data)
+                except ValueError as e:
+                    raise e
+            else:
+                con = directory_connect()
+                directory = con.root.Directory()
+
+                try:
+                    # call primary
+                    primary_handler_addr = directory.get_primary_for_file(filename)
+
+                    if primary_handler_addr != "None":
+                        con = rpyc.connect(host=primary_handler_addr[0], port=primary_handler_addr[1])
+                        primary_handler = con.root.Handler()
+
+                        commit_info = primary_handler.primary_optimistic_write_commit(filename, new_version_id, data)
+
+                        can_commit = commit_info[0]
+
+                        if can_commit:
+                            file_obj = commit_info[1]
+
+                            # update replica
+                            files_replicated_dir = FILES_DIR + UUID + REPLICATED
+
+                            with open(files_replicated_dir + str(filename), 'w') as f:
+                                f.write(file_obj)
+
+                            current_time = datetime.now()
+                            current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+                            config_object = ConfigParser()
+                            config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
+
+                            files_replicated_info = config_object["FILES_REPLICATED"]
+                            files_replicated_info[filename] = current_time_str
+
+                            return True
+
+                        else:
+                            return False
+                    else:
+                        raise ValueError
                 except ValueError as e:
                     raise e
 
@@ -731,9 +756,10 @@ class HandlerService(rpyc.Service):
             except ValueError as e:
                 raise e
 
-        def exposed_optimistic_write_commit(self, filename, new_version_id, data):
+        def exposed_primary_optimistic_write_commit(self, filename, new_version_id, data):
             try:
-                return self.local_optimistic_write_commit(filename)
+                print("BEAR2")
+                return self.local_optimistic_write_commit(filename, new_version_id, data)
             except ValueError as e:
                 raise e
 
@@ -752,6 +778,7 @@ class HandlerService(rpyc.Service):
 
         def local_optimistic_write_commit(self, filename, new_version_id, data):
             try:
+                print("BEAR3")
                 # check file_config
                 current_version_id = self.get_version(filename)
 
@@ -768,10 +795,12 @@ class HandlerService(rpyc.Service):
                     with open(files_owned_dir + str(filename), 'r') as f1:
                         file_obj = f1.read()
 
+                    print(file_obj)
+
                     # return True, new file object
                     return True, file_obj
                 else:
-                    return False
+                    return False,
             except ValueError as e:
                 raise e
 
@@ -825,13 +854,14 @@ class HandlerService(rpyc.Service):
 
             if config_object.has_option(file_section, filename):
                 file_version = config_object.get(file_section, filename)
-
+                print(file_version)
                 if file_version == "":
                     return 0
                 else:
                     file_version = int(file_version)
                     return file_version
             else:
+                print("why am i here")
                 raise ValueError
 
         # Checks if file has been replicated locally

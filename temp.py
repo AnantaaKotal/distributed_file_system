@@ -6,6 +6,8 @@ import webbrowser
 import os
 import subprocess
 import timeout_decorator
+import platform
+
 
 path = '/Users/anantaa/Desktop/python/dist_sys/config/metadata/iyyjzmzz.conf'
 file_section = 'FILES_OWNED'
@@ -109,4 +111,15 @@ def has_option():
     else:
         raise ValueError
 
-has_option()
+def openfile():
+    is_windows = any(platform.win32_ver())
+    programName = 'C:\\Windows\\System32\\notepad.exe'
+
+    if is_windows:
+        subprocess.Popen([programName, file_name])
+    else:
+        p = subprocess.call(['open', '-a', 'TextEdit', file_name])
+
+
+
+openfile()

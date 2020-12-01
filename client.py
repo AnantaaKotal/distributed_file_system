@@ -11,7 +11,7 @@ import timeout_decorator
 
 #Directory Address
 DIRECTORY_ADDR = 'localhost'
-DIRECTORY_PORT = 12346
+DIRECTORY_PORT = 12345
 
 # backup_directory_address
 BACKUP_DIRECTORY_ADDR = 'localhost'
@@ -74,7 +74,10 @@ def timed_commit(handler, filename, commit_id, input_str=None):
 
         if user_input[0] == "Y":
             print("Asking to extend lease..")
-            can_extend, lease_time = handler.extend_lease(filename, commit_id)
+            try:
+                can_extend, lease_time = handler.extend_lease(filename, commit_id)
+            except ValueError as e:
+                raise e
             print(can_extend, lease_time)
             if can_extend:
                 print("Request to extend lease granted..")
@@ -231,6 +234,7 @@ def overwrite(handler, filename):
             print("Error Writing")
             print(e)
             print("Try again later")
+
     except ValueError as e:
         print("Error writing")
 

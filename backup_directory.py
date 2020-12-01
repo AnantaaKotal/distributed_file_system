@@ -25,7 +25,7 @@ DIRECTORY_PORT = 12345
 BACKUP_CONFIG_DIR = str(pathlib.Path().absolute()) + "/config/backup/"
 
 backup_scheduler = sched.scheduler(time.time, time.sleep)
-BACKUP_TIME = 5
+BACKUP_TIME = 30
 
 def get_random_string():
     letters = string.ascii_lowercase
@@ -160,13 +160,13 @@ class BackupDirectoryService(rpyc.Service):
                         # print("Connection Error")
                         addr = self.reassign_primary(host, port, filename)
                         if addr is None:
-                            return None
+                            return "None"
                         return addr
                 else:
                     # print("Handler Not live")
                     addr = self.reassign_primary(host, port, filename)
                     if addr is None:
-                        return None
+                        return "None"
                     return addr
 
         # Removes File from record upon deletion

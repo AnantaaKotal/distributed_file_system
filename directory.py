@@ -138,13 +138,13 @@ class DirectoryService(rpyc.Service):
                         # print("Connection Error")
                         addr = self.reassign_primary(host, port, filename)
                         if addr is None:
-                            return None
+                            return "None"
                         return addr
                 else:
                     # print("Handler Not live")
                     addr = self.reassign_primary(host, port, filename)
                     if addr is None:
-                        return None
+                        return "None"
                     return addr
 
         #Removes File from record upon deletion
