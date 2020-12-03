@@ -165,7 +165,7 @@ class HandlerService(rpyc.Service):
             time.sleep(10)
             raise TimeoutError
 
-        def exposed_create(self, filename, data):
+        def exposed_create(self, filename):
             con = directory_connect()
             directory = con.root.Directory()
 
@@ -176,7 +176,7 @@ class HandlerService(rpyc.Service):
             if fileNameExists:
                 raise ValueError("File Name Exists; Try another File Name")
             else:
-                self.local_file_create(filename, data)
+                self.local_file_create(filename)
 
         def exposed_replicated_read(self, filename):
             files_owned_dir = FILES_DIR + UUID + OWNED
@@ -297,7 +297,7 @@ class HandlerService(rpyc.Service):
         def exposed_extend_lease(self, filename, commit_id):
             if self.local_is_file_owned(filename):
                 can_extend = self.local_extend_lease(filename, commit_id)
-                print(can_extend)
+                # print(can_extend)
                 return can_extend, LEASE_TIME
             else:
                 con = directory_connect()
@@ -704,7 +704,8 @@ class HandlerService(rpyc.Service):
         def exposed_optimistic_write_commit(self, filename, new_version_id, data):
             if self.local_is_file_owned(filename):
                 try:
-                    return self.local_optimistic_write_commit(filename, new_version_id, data)
+                    commit_info = self.local_optimistic_write_commit(filename, new_version_id, data)
+                    return commit_info[0]
                 except ValueError as e:
                     raise e
             else:
@@ -758,7 +759,6 @@ class HandlerService(rpyc.Service):
 
         def exposed_primary_optimistic_write_commit(self, filename, new_version_id, data):
             try:
-                print("BEAR2")
                 return self.local_optimistic_write_commit(filename, new_version_id, data)
             except ValueError as e:
                 raise e
@@ -778,9 +778,11 @@ class HandlerService(rpyc.Service):
 
         def local_optimistic_write_commit(self, filename, new_version_id, data):
             try:
-                print("BEAR3")
+
                 # check file_config
                 current_version_id = self.get_version(filename)
+                # print("current_version " + str(current_version_id))
+                # print("new_version " + str(new_version_id))
 
                 # if file_version < version_id:
                 if current_version_id < new_version_id:
@@ -795,7 +797,7 @@ class HandlerService(rpyc.Service):
                     with open(files_owned_dir + str(filename), 'r') as f1:
                         file_obj = f1.read()
 
-                    print(file_obj)
+                    # print(file_obj)
 
                     # return True, new file object
                     return True, file_obj
@@ -854,14 +856,13 @@ class HandlerService(rpyc.Service):
 
             if config_object.has_option(file_section, filename):
                 file_version = config_object.get(file_section, filename)
-                print(file_version)
+
                 if file_version == "":
                     return 0
                 else:
                     file_version = int(file_version)
                     return file_version
             else:
-                print("why am i here")
                 raise ValueError
 
         # Checks if file has been replicated locally
@@ -882,7 +883,7 @@ class HandlerService(rpyc.Service):
 
             return False
 
-        def local_file_create(self, filename, data):
+        def local_file_create(self, filename):
             config_object = ConfigParser()
             config_object.read_file(open(METADATA_DIR + UUID + '.conf'))
 
@@ -896,7 +897,7 @@ class HandlerService(rpyc.Service):
             # Create file locally
             files_owned_dir = FILES_DIR + UUID + OWNED
             with open(files_owned_dir + str(filename), 'w') as f:
-                f.write(data)
+                f.write("")
 
             self.print_on_update("Created")
 

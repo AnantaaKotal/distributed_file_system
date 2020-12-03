@@ -37,6 +37,7 @@ def get_data_from_main(sc):
     directory = con.root.Directory()
     data_1, data_2 = directory.backup()
     con.close()
+    # print(data_1)
 
     with open(BACKUP_CONFIG_DIR + 'handlr_addr.conf', 'w') as f:
         f.write(data_1)

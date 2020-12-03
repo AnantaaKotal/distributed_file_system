@@ -28,11 +28,20 @@ def get_random_string():
     result_str = ''.join(random.choice(letters) for i in range(9))
     return result_str
 
-def create_file(handler, filename, data):
+
+def create_file(handler, filename):
     try:
-        handler.create(filename, data)
+        handler.create(filename)
     except ValueError as e:
         print("File Name Exists; Try another File Name")
+
+
+def seek_file(handler, filename):
+    try:
+        data = handler.read(filename)
+        print("File found.")
+    except ValueError as e:
+        print("File not found.")
 
 
 def read_file(handler, filename):
@@ -193,17 +202,23 @@ def delete(handler, filename):
         print("File Not found")
 
 # Append to file
-def append(handler, filename, data):
+def append(handler, filename):
     try:
+        data = input("\nEnter string to append: ")
         new_data = handler.append(filename, data)
         print(new_data)
     except ValueError as e:
         print("File not found")
 
 # Optimistic write
-def overwrite(handler, filename):
+def overwrite(handler_addr, filename):
     try:
+        con_handler = rpyc.connect(host=handler_addr[0], port=handler_addr[1])
+        handler = con_handler.root.Handler()
+
         data, version_id = handler.optimistic_write_request(filename)
+
+        con_handler.close()
 
         # Creating temp file on Client machine
         if not os.path.exists(TEMP_DIR):
@@ -223,20 +238,27 @@ def overwrite(handler, filename):
         new_version_id = version_id + 1
 
         try:
+            con_handler = rpyc.connect(host=handler_addr[0], port=handler_addr[1])
+            handler = con_handler.root.Handler()
+
             can_write = handler.optimistic_write_commit(filename, new_version_id, data)
 
             if can_write:
                 print("Write completed successfully")
+                con_handler.close()
             else:
                 print("Your file version is out of data")
                 print("Please sync before writing")
+                con_handler.close()
         except ValueError as e:
             print("Error Writing")
             print(e)
             print("Try again later")
+            con_handler.close()
 
     except ValueError as e:
         print("Error writing")
+        con_handler.close()
 
 # Connect to Directory
 def directory_connect():
@@ -258,21 +280,19 @@ def try_handler_connect():
         return None
     else:
         print(handler_addr)
-        con_handler = rpyc.connect(host=handler_addr[0], port=handler_addr[1])
-        handler = con_handler.root.Handler()
-        return handler, handler_addr
+        return handler_addr
 
 
 
 
 def main():
-    handler_obj = try_handler_connect()
+    handler_addr = try_handler_connect()
 
-    if handler_obj is None:
+    if handler_addr is None:
         print("No Live Server Found")
     else:
-        handler = handler_obj[0]
-        handler_addr = handler_obj[1]
+        con_handler = rpyc.connect(host=handler_addr[0], port=handler_addr[1])
+        handler = con_handler.root.Handler()
 
         print("Connected to" + str(handler_addr[0]) + ":" + str(handler_addr[1]))
         print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
@@ -286,7 +306,9 @@ def main():
                 take_input = False
             # Handle Client operation
             elif args[0] == "create":
-                create_file(handler, filename=args[1], data=args[2])
+                create_file(handler, filename=args[1])
+            elif args[0] == "seek":
+                seek_file(handler, filename=args[1])
             elif args[0] == "read":
                 read_file(handler, filename=args[1])
             elif args[0] == "write":
@@ -294,9 +316,9 @@ def main():
             elif args[0] == "delete":
                 delete(handler, filename=args[1])
             elif args[0] == "append":
-                append(handler, filename=args[1], data=args[2])
+                append(handler, filename=args[1])
             elif args[0] == "overwrite":
-                overwrite(handler, filename=args[1])
+                overwrite(handler_addr, filename=args[1])
             else:
                 print("Error reading client request")
 
