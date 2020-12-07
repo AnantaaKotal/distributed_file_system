@@ -16,14 +16,15 @@ from rpyc.utils.server import ThreadedServer
 
 CONFIG_DIR = str(pathlib.Path().absolute()) + "/config/"
 
+#Directory Address
+DIRECTORY_ADDR = 'localhost'
+DIRECTORY_PORT = 12345
+
 # backup_directory_address
 BACKUP_DIRECTORY_ADDR = 'localhost'
 BACKUP_DIRECTORY_PORT = 12346
 
-
-file_table = set()
-
-
+# Random String Generator
 def get_random_string():
     letters = string.ascii_lowercase
     result_str = ''.join(random.choice(letters) for i in range(8))
@@ -141,7 +142,7 @@ class DirectoryService(rpyc.Service):
                             return "None"
                         return addr
                 else:
-                    # print("Handler Not live")
+                    print("Handler Not live")
                     addr = self.reassign_primary(host, port, filename)
                     if addr is None:
                         return "None"
@@ -178,6 +179,7 @@ class DirectoryService(rpyc.Service):
 
             return "None"
 
+        # Checks if Handler service is live at given address
         def is_Handler_live(self, host, port):
             addr = host + "," + port
 
@@ -217,7 +219,7 @@ class DirectoryService(rpyc.Service):
 
         # Reassigns Primary when Handler is inactive
         def reassign_primary(self, handler_host, handler_port, filename):
-            # print("Reassigning primary")
+            print("Reassigning primary")
             # Mark handler as inactive
             self.mark_handler_as_inactive(handler_host, handler_port)
 
@@ -242,9 +244,17 @@ class DirectoryService(rpyc.Service):
                     version_info = config_primary["VERSION"]
                     version_info["v"] = str(new_file_list_version)
 
+
             # Finally update config file with new primary
             with open(CONFIG_DIR + 'file_list.conf', 'w') as conf:
                 config_primary.write(conf)
+
+            print("Assigned new primary")
+            print("Updating file list...")
+            with open(CONFIG_DIR + 'file_list.conf', 'r') as f:
+                data = f.read()
+
+            print(data)
 
             return new_addr
 
@@ -254,19 +264,21 @@ class DirectoryService(rpyc.Service):
             i = 0
 
             # Tries 3 times
-            while not is_file_replicated and i<3:
+            while (not is_file_replicated) and (i<3) :
                 host, port = self.get_live_handler()
+                print("Trying to replicate at: " + str(host) + str(port))
                 con = rpyc.connect(host, port)
                 handler = con.root.Handler()
                 is_file_replicated = handler.is_file_replicated(filename)
-                # print("file replicated at:" + str(host) + str(port))
+                if is_file_replicated:
+                    print("File replica found at:" + str(host) + str(port))
                 con.close()
                 i += 1
 
             if is_file_replicated:
                 con = rpyc.connect(host, port)
                 handler = con.root.Handler()
-                # print("Making Handler primary" + str(host) + str(port))
+                print("Making Handler primary" + str(host) + str(port))
                 handler.make_primary(filename)
                 con.close()
                 return host, port
@@ -298,7 +310,7 @@ class DirectoryService(rpyc.Service):
                     with open(CONFIG_DIR + 'handlr_addr.conf', 'w') as conf:
                         config_object_inactive.write(conf)
 
-
+        # Send current data to backup
         def exposed_backup(self):
             print("Copying Data to Backup..")
             with open(CONFIG_DIR + 'handlr_addr.conf', 'r') as f:
@@ -341,7 +353,7 @@ def get_backup():
 
 
 if __name__ == "__main__":
-    server = ThreadedServer(DirectoryService, port=12345)
+    server = ThreadedServer(DirectoryService, port="directory_port")
     get_backup()
     print("Starting Service")
     server.start()

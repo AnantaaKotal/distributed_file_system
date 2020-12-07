@@ -9,6 +9,8 @@ import time
 import signal
 import timeout_decorator
 
+""" Interactive Client that communicates with Handler and accepts user instructions """
+
 #Directory Address
 DIRECTORY_ADDR = 'localhost'
 DIRECTORY_PORT = 12345
@@ -23,12 +25,14 @@ USER_INPUT_TIMEOUT = 5
 LEASE_TIME = 30
 
 
+# random string generator
 def get_random_string():
     letters = string.ascii_lowercase
     result_str = ''.join(random.choice(letters) for i in range(9))
     return result_str
 
 
+# create file in filesystem
 def create_file(handler, filename):
     try:
         handler.create(filename)
@@ -36,6 +40,7 @@ def create_file(handler, filename):
         print("File Name Exists; Try another File Name")
 
 
+# seek file in filesystem
 def seek_file(handler, filename):
     try:
         data = handler.read(filename)
@@ -44,6 +49,7 @@ def seek_file(handler, filename):
         print("File not found.")
 
 
+# read file in filesystem
 def read_file(handler, filename):
     try:
         data = handler.read(filename)
@@ -52,6 +58,7 @@ def read_file(handler, filename):
         print(e)
 
 
+# Write Commit to Handler
 def write_file(handler, filename, commit_id):
     with open(TEMP_DIR + str(filename), 'r') as f:
         data = f.read()
@@ -63,6 +70,7 @@ def write_file(handler, filename, commit_id):
         print("Try again later")
 
 
+# receives timed user input
 @timeout_decorator.timeout(5)
 def timed_input(input_str=None):
     if input_str is not None:
@@ -77,6 +85,9 @@ def timed_write():
     return
 
 
+# Supports lease extension logic;
+# accepts user input before timeout
+# commits otherwise
 def timed_commit(handler, filename, commit_id, input_str=None):
     try:
         user_input = timed_input(input_str)
@@ -110,6 +121,7 @@ def timed_commit(handler, filename, commit_id, input_str=None):
         write_file(handler, filename, commit_id)
 
 
+# Write (Pessimistic)
 def write(handler, filename):
     global LEASE_TIME
     print("Please wait while others finish writing...")
@@ -127,7 +139,7 @@ def write(handler, filename):
     ready_to_write = write_info[0]
     while not ready_to_write:
         queue_number = write_info[1]
-        sleep_time = (LEASE_TIME * int(queue_number))
+        sleep_time = (10 * int(queue_number))
         time.sleep(sleep_time)
         request_info = handler.write_request(filename, commit_id, timestamp_str=time_stamp)
 
@@ -162,6 +174,7 @@ def write(handler, filename):
         timed_commit(handler, filename, commit_id, input_str="\nYour time is up")
 
 
+# Delete
 def delete(handler, filename):
     global LEASE_TIME
     print("Please wait while others finish writing...")
@@ -206,6 +219,7 @@ def append(handler, filename):
     try:
         data = input("\nEnter string to append: ")
         new_data = handler.append(filename, data)
+        print("New data at file:")
         print(new_data)
     except ValueError as e:
         print("File not found")

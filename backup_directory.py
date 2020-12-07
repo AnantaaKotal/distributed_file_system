@@ -22,22 +22,30 @@ from rpyc.utils.server import ThreadedServer
 DIRECTORY_ADDR = 'localhost'
 DIRECTORY_PORT = 12345
 
+# backup_directory_address
+BACKUP_DIRECTORY_ADDR = 'localhost'
+BACKUP_DIRECTORY_PORT = 12346
+
 BACKUP_CONFIG_DIR = str(pathlib.Path().absolute()) + "/config/backup/"
 
+# BACKUP TIME
 backup_scheduler = sched.scheduler(time.time, time.sleep)
 BACKUP_TIME = 30
 
+
+# Random String Generator
 def get_random_string():
     letters = string.ascii_lowercase
     result_str = ''.join(random.choice(letters) for i in range(8))
     return result_str
 
+
+# Get data from main directory
 def get_data_from_main(sc):
     con = rpyc.connect(DIRECTORY_ADDR, port=DIRECTORY_PORT)
     directory = con.root.Directory()
     data_1, data_2 = directory.backup()
     con.close()
-    # print(data_1)
 
     with open(BACKUP_CONFIG_DIR + 'handlr_addr.conf', 'w') as f:
         f.write(data_1)
@@ -47,7 +55,6 @@ def get_data_from_main(sc):
 
     print("Backed up..")
 
-    # do your stuff
     s.enter(BACKUP_TIME, 1, get_data_from_main, (sc,))
 
 
@@ -201,6 +208,7 @@ class BackupDirectoryService(rpyc.Service):
 
             return "None"
 
+        # Checks if Handler service is live at given address
         def is_Handler_live(self, host, port):
             addr = host + "," + port
 
@@ -347,12 +355,13 @@ class BackupDirectoryService(rpyc.Service):
                 return handler_version_bk, file_list_version_bk, data_1, data_2
 
 
+
 if __name__ == "__main__":
     i = 0
     s = sched.scheduler(time.time, time.sleep)
 
     do_backup = True
-    server = ThreadedServer(BackupDirectoryService, port=12346)
+    server = ThreadedServer(BackupDirectoryService, port="directory_port")
 
     while do_backup:
         try:
