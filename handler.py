@@ -11,11 +11,11 @@ import socket
 
 
 #Directory Address
-DIRECTORY_ADDR = 'localhost'
+DIRECTORY_ADDR = '192.168.0.104'
 DIRECTORY_PORT = 12345
 
 # backup_directory_address
-BACKUP_DIRECTORY_ADDR = 'localhost'
+BACKUP_DIRECTORY_ADDR = '192.168.0.104'
 BACKUP_DIRECTORY_PORT = 12346
 
 
@@ -72,6 +72,7 @@ def report_self_to_directory(port):
     UUID = fname
     print("Identifier: " + UUID)
 
+    print(isRegistered)
     if isRegistered:
         conf = ConfigParser()
         conf.read_file(open(METADATA_DIR + UUID + '.conf'))

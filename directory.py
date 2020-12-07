@@ -353,7 +353,7 @@ def get_backup():
 
 
 if __name__ == "__main__":
-    server = ThreadedServer(DirectoryService, port="directory_port")
+    server = ThreadedServer(DirectoryService, port=DIRECTORY_PORT)
     get_backup()
     print("Starting Service")
     server.start()
