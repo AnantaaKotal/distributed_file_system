@@ -22,6 +22,8 @@ BACKUP_DIRECTORY_PORT = 12346
 #DEFAULT PORT
 PORT = 8888
 
+REPLICA_TOLERANCE = 30
+
 # global variables
 files_owned = "FILES_OWNED"
 files_replicated = "FILES_REPLICATED"
@@ -72,7 +74,7 @@ def report_self_to_directory(port):
     UUID = fname
     print("Identifier: " + UUID)
 
-    print(isRegistered)
+    # print(isRegistered)
     if isRegistered:
         conf = ConfigParser()
         conf.read_file(open(METADATA_DIR + UUID + '.conf'))
@@ -907,7 +909,7 @@ class HandlerService(rpyc.Service):
                     current_time = datetime.now()
                     diff = math.floor((current_time - replicated_time).total_seconds())
 
-                    if diff <= 30:
+                    if diff <= REPLICA_TOLERANCE:
                         return True
 
             return False

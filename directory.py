@@ -17,12 +17,13 @@ from rpyc.utils.server import ThreadedServer
 CONFIG_DIR = str(pathlib.Path().absolute()) + "/config/"
 
 #Directory Address
-DIRECTORY_ADDR = 'localhost'
+DIRECTORY_ADDR = '192.168.0.104'
 DIRECTORY_PORT = 12345
 
 # backup_directory_address
-BACKUP_DIRECTORY_ADDR = 'localhost'
+BACKUP_DIRECTORY_ADDR = '192.168.0.104'
 BACKUP_DIRECTORY_PORT = 12346
+
 
 # Random String Generator
 def get_random_string():
@@ -267,6 +268,7 @@ class DirectoryService(rpyc.Service):
             while (not is_file_replicated) and (i<3) :
                 host, port = self.get_live_handler()
                 print("Trying to replicate at: " + str(host) + str(port))
+
                 con = rpyc.connect(host, port)
                 handler = con.root.Handler()
                 is_file_replicated = handler.is_file_replicated(filename)

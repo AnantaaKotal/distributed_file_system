@@ -15,11 +15,11 @@ The rates can be tested with a byte counter or time counter
 
 
 #Directory Address
-DIRECTORY_ADDR = 'localhost'
+DIRECTORY_ADDR = '192.168.0.104'
 DIRECTORY_PORT = 12345
 
 # backup_directory_address
-BACKUP_DIRECTORY_ADDR = 'localhost'
+BACKUP_DIRECTORY_ADDR = '192.168.0.104'
 BACKUP_DIRECTORY_PORT = 12346
 
 FILENAME = "file1"

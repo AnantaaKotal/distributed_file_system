@@ -12,17 +12,18 @@ import timeout_decorator
 """ Interactive Client that communicates with Handler and accepts user instructions """
 
 #Directory Address
-DIRECTORY_ADDR = 'localhost'
+DIRECTORY_ADDR = '192.168.0.104'
 DIRECTORY_PORT = 12345
 
 # backup_directory_address
-BACKUP_DIRECTORY_ADDR = 'localhost'
+BACKUP_DIRECTORY_ADDR = '192.168.0.104'
 BACKUP_DIRECTORY_PORT = 12346
 
 TEMP_DIR = str(pathlib.Path().absolute()) + "/tmp/"
 
 USER_INPUT_TIMEOUT = 5
 LEASE_TIME = 30
+WAIT_TIME = 15
 
 
 # random string generator
@@ -124,6 +125,7 @@ def timed_commit(handler, filename, commit_id, input_str=None):
 # Write (Pessimistic)
 def write(handler, filename):
     global LEASE_TIME
+    global WAIT_TIME
     print("Please wait while others finish writing...")
     commit_id = get_random_string()
 
@@ -139,8 +141,8 @@ def write(handler, filename):
     ready_to_write = write_info[0]
     while not ready_to_write:
         queue_number = write_info[1]
-        sleep_time = (10 * int(queue_number))
-        time.sleep(sleep_time)
+        # sleep_time = (10 * int(queue_number))
+        time.sleep(WAIT_TIME)
         request_info = handler.write_request(filename, commit_id, timestamp_str=time_stamp)
 
         # In case file is deleted by previous action on queue
